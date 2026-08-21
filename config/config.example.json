@@ -1,0 +1,24 @@
+{
+  "server": {
+    "port": 8080,
+    "bind": "127.0.0.1"
+  },
+  "tacview": {
+    "host": "127.0.0.1",
+    "port": 34250,
+    "password": "",
+    "reconnectDelayMs": 5000
+  },
+  "gca": {
+    "staleAfterSec": 15,
+    "runways": [
+      {
+        "id": "Nellis RWY 21L",
+        "threshold": { "lat": 36.2377, "lon": -115.0345, "altFt": 1870 },
+        "headingDeg": 210,
+        "glidepathDeg": 3.0
+      }
+    ],
+    "defaultRunway": "Nellis RWY 21L"
+  }
+}

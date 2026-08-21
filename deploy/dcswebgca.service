@@ -1,0 +1,18 @@
+[Unit]
+Description=DCS Web GCA (Tacview ACMI -> WebSocket GCA console)
+After=network.target
+
+[Service]
+Type=simple
+# Adjust User/WorkingDirectory to your deployment path
+User=www-data
+WorkingDirectory=/opt/dcs-web-gca
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=5
+Environment=GCA_CONFIG=/opt/dcs-web-gca/config/config.json
+# Set Tacview password here if your Tacview real-time stream is protected
+# Environment=TACVIEW_PASSWORD=changeme
+
+[Install]
+WantedBy=multi-user.target

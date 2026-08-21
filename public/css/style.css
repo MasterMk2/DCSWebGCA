@@ -1,0 +1,60 @@
+:root {
+  --bg: #0a0e12;
+  --panel: #10161d;
+  --green: #39ff8b;
+  --amber: #ffc23d;
+  --red: #ff5252;
+  --dim: #5a6b7a;
+  --text: #cfe3d8;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Consolas", "Courier New", monospace;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid #1d2a36;
+}
+
+h1 { font-size: 1.2rem; margin: 0; color: var(--green); }
+h1 .subtitle { font-size: 0.7rem; color: var(--dim); margin-left: 8px; }
+h2 { font-size: 0.8rem; color: var(--dim); margin: 0 0 6px 0; text-transform: uppercase; letter-spacing: 2px; }
+
+.controls { display: flex; align-items: center; gap: 10px; }
+.controls select {
+  background: #16202a;
+  color: var(--text);
+  border: 1px solid #2a3a4a;
+  padding: 4px 8px;
+  font-family: inherit;
+}
+
+.status { padding: 3px 10px; border-radius: 3px; font-size: 0.75rem; }
+.status.connected { color: var(--green); border: 1px solid var(--green); }
+.status.disconnected { color: var(--red); border: 1px solid var(--red); }
+
+main { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+
+.scope-panel, .table-panel {
+  background: var(--panel);
+  border: 1px solid #1d2a36;
+  padding: 12px;
+}
+
+canvas { display: block; width: 100%; height: auto; background: #060a0d; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #1d2a36; }
+th { color: var(--dim); font-weight: normal; text-transform: uppercase; font-size: 0.7rem; }
+td.guidance-ok { color: var(--green); }
+td.guidance-warn { color: var(--amber); }

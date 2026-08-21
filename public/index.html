@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DCS Web GCA</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <h1>DCS Web GCA <span class="subtitle">Ground Controlled Approach Console</span></h1>
+    <div class="controls">
+      <label for="runwaySelect">RWY:</label>
+      <select id="runwaySelect"></select>
+      <span id="connStatus" class="status disconnected">DISCONNECTED</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="scope-panel">
+      <h2>Azimuth</h2>
+      <canvas id="azimuthScope" width="900" height="360"></canvas>
+    </section>
+
+    <section class="scope-panel">
+      <h2>Elevation</h2>
+      <canvas id="elevationScope" width="900" height="300"></canvas>
+    </section>
+
+    <section class="table-panel">
+      <h2>Approach Data</h2>
+      <table id="trackTable">
+        <thead>
+          <tr>
+            <th>Callsign</th>
+            <th>Type</th>
+            <th>RNG (nm)</th>
+            <th>AZ DEV</th>
+            <th>GS DEV</th>
+            <th>ALT (ft)</th>
+            <th>IAS (kt)</th>
+            <th>Guidance</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

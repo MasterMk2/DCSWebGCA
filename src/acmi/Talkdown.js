@@ -26,13 +26,15 @@ class Talkdown {
     this.state = new Map(); // runwayId -> Map(trackId -> { lastMsgAt, lastKey })
   }
 
-  resolveRunway(runwayId) {
-    const g = this.cfg.gca;
-    return (
-      g.runways.find((r) => r.id === runwayId) ||
-      g.runways.find((r) => r.id === g.defaultRunway) ||
-      g.runways[0]
-    );
+  /**
+   * Accepts either a resolved runway object (preferred, as passed by
+   * DcsSource) or a runway id looked up in cfg.gca.runways.
+   */
+  resolveRunway(runway) {
+    if (runway && typeof runway === 'object') return runway;
+    const g = this.cfg.gca || {};
+    const runways = g.runways || [];
+    return runways.find((r) => r.id === runway) || null;
   }
 
   /**

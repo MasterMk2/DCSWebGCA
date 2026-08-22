@@ -93,6 +93,9 @@ class DcsSource {
     const rwy = this.resolveRunway(runwayId);
     const snap = this.store.snapshot(rwy);
     snap.sourceId = this.id;
+    // the console needs the full runway object (heading/glidepath/threshold)
+    snap.runway = rwy;
+    snap.counts = { objects: this.store.tracks.size };
     return snap;
   }
 

@@ -39,7 +39,7 @@ class TrackStore {
   applyUpdate({ id, props }) {
     let t = this.tracks.get(id);
     if (!t) {
-      t = {};
+      t = { id };
       this.tracks.set(id, t);
     }
 
@@ -106,6 +106,11 @@ class TrackStore {
     this.tracks.delete(id);
   }
 
+  /** Mission restart / stream reconnect: drop everything. */
+  clear() {
+    this.tracks.clear();
+  }
+
   prune() {
     const cutoff = Date.now() - this.cfg.gca.staleAfterSec * 1000;
     for (const [id, t] of this.tracks) {
@@ -159,19 +164,24 @@ class TrackStore {
     };
   }
 
-  snapshot(runwayId) {
+  /**
+   * @param {object|null} runway resolved runway object (DcsSource resolves it
+   *        through the RunwayProvider; id strings are no longer accepted)
+   */
+  snapshot(runway) {
     this.prune();
-    const rwy =
-      this.cfg.gca.runways.find((r) => r.id === runwayId) ||
-      this.cfg.gca.runways.find((r) => r.id === this.cfg.gca.defaultRunway) ||
-      this.cfg.gca.runways[0];
+    const rwy = runway && typeof runway === 'object' ? runway : null;
 
     const tracks = [];
     for (const t of this.tracks.values()) {
+      // ground clutter never reaches the console
+      const category = categoryOf(t.Type);
+      if (category === 'Ground' || category === 'Ship') continue;
       const rec = {
         id: t.id,
         name: t.Name || 'Unknown',
         type: t.Type || '',
+        category,
         pilot: t.Pilot || '',
         lat: t.lat,
         lon: t.lon,
@@ -179,7 +189,7 @@ class TrackStore {
         v: t.v,
         altFt: t.altM !== undefined ? Math.round(t.altM / M_PER_FT) : null,
         hdg: t.hdg !== undefined ? Math.round(t.hdg) : null,
-        spdKt: t.spdKt !== undefined ? t.spdKt : null,
+        gsKt: t.spdKt !== undefined ? t.spdKt : null,
         gc: t.gc !== undefined ? Math.round(t.gc) : null,
         vsFpm: t.vsFpm !== undefined ? t.vsFpm : null,
       };
@@ -190,6 +200,16 @@ class TrackStore {
     }
     return { time: Date.now(), runway: rwy ? rwy.id : null, tracks };
   }
+}
+
+/** Coarse category the console UI switches on ('FixedWing'/'Rotorcraft'/...). */
+function categoryOf(type) {
+  if (typeof type !== 'string') return 'Unknown';
+  if (type.startsWith('Air+FixedWing')) return 'FixedWing';
+  if (type.startsWith('Air+Rotorcraft')) return 'Rotorcraft';
+  if (type.startsWith('Ground')) return 'Ground';
+  if (type.startsWith('Sea')) return 'Ship';
+  return 'Unknown';
 }
 
 function normDeg(d) {

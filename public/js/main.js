@@ -357,7 +357,139 @@ const GCA_MAX_ALT_FT = 6000;
 function renderGca() {
   drawAzimuth();
   drawElevation();
+  renderDigest();
   renderApproachTable();
+}
+
+/* ---------- approach digest (per-aircraft deviation history) ---------- */
+
+const DIGEST_HISTORY = 60; // samples kept per aircraft (~12 s at 5 Hz)
+const digestHistory = new Map(); // track id -> [{ az, gs, rng }]
+
+function pushDigestSample(t) {
+  const ap = t.approach;
+  let h = digestHistory.get(t.id);
+  if (!h) {
+    h = [];
+    digestHistory.set(t.id, h);
+  }
+  h.push({ az: ap.azDevDeg, gs: ap.gsDevDeg, rng: ap.rangeNm });
+  if (h.length > DIGEST_HISTORY) h.shift();
+  return h;
+}
+
+/** how well the aircraft has been holding course and glidepath lately */
+function gradeOf(history) {
+  const az = state.tolerance.azToleranceDeg;
+  const gs = state.tolerance.gsToleranceDeg;
+  const recent = history.slice(-25);
+  if (!recent.length) return { cls: 'grade-fair', text: '--' };
+  let inTol = 0;
+  for (const s of recent) {
+    const okAz = Math.abs(s.az) <= az;
+    const okGs = s.gs === null || Math.abs(s.gs) <= gs;
+    if (okAz && okGs) inTol++;
+  }
+  const ratio = inTol / recent.length;
+  if (ratio >= 0.8) return { cls: 'grade-good', text: 'ON PARAMS' };
+  if (ratio >= 0.4) return { cls: 'grade-fair', text: 'DRIFTING' };
+  return { cls: 'grade-poor', text: 'OFF PARAMS' };
+}
+
+function renderDigest() {
+  const panel = document.getElementById('digestPanel');
+  const rows = state.tracks
+    .filter((t) => t.approach && t.approach.onFinal && !t.onGround)
+    .sort((a, b) => a.approach.rangeNm - b.approach.rangeNm);
+
+  const live = new Set(rows.map((t) => t.id));
+  for (const id of [...digestHistory.keys()]) if (!live.has(id)) digestHistory.delete(id);
+
+  if (rows.length === 0) {
+    panel.innerHTML = '<div class="digest-empty">no aircraft on final</div>';
+    return;
+  }
+
+  // keep the existing DOM nodes so the sparklines do not flicker at 5 Hz
+  const seen = new Set();
+  for (const t of rows) {
+    const history = pushDigestSample(t);
+    const ap = t.approach;
+    const grade = gradeOf(history);
+    let row = panel.querySelector('[data-digest-id="' + cssEscape(t.id) + '"]');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'digest-row';
+      row.dataset.digestId = t.id;
+      row.innerHTML =
+        '<div class="digest-head"><span class="digest-callsign"></span>' +
+        '<span class="digest-status"></span><span class="grade"></span></div>' +
+        '<div class="digest-stats"></div>' +
+        '<canvas class="sparkline" width="320" height="40"></canvas>';
+      panel.appendChild(row);
+    }
+    seen.add(row);
+
+    row.querySelector('.digest-callsign').textContent = t.pilot || t.name || t.id;
+    row.querySelector('.digest-status').textContent = ap.guidance || '';
+    const badge = row.querySelector('.grade');
+    badge.textContent = grade.text;
+    badge.className = 'grade ' + grade.cls;
+    row.querySelector('.digest-stats').textContent =
+      `RNG ${ap.rangeNm.toFixed(1)} nm  ALT ${t.altFt ?? '-'} ft` +
+      (ap.gpAltFt !== null ? ` (GP ${ap.gpAltFt})` : '') +
+      `  VS ${t.vsFpm ?? '-'}  GS ${t.gsKt ?? '-'} kt`;
+    drawSparkline(row.querySelector('.sparkline'), history);
+  }
+
+  for (const child of [...panel.children]) {
+    if (!seen.has(child)) panel.removeChild(child);
+  }
+}
+
+/** deviation history: azimuth (green) and glidepath (amber) around the centre line */
+function drawSparkline(canvas, history) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const azTol = state.tolerance.azToleranceDeg;
+  const gsTol = state.tolerance.gsToleranceDeg;
+
+  // tolerance band + centre line
+  ctx.fillStyle = '#0e1a14';
+  ctx.fillRect(0, H / 2 - H * 0.15, W, H * 0.3);
+  ctx.strokeStyle = '#1d2a36';
+  ctx.beginPath();
+  ctx.moveTo(0, H / 2);
+  ctx.lineTo(W, H / 2);
+  ctx.stroke();
+
+  const plot = (key, tol, color) => {
+    const scale = tol * 5; // full scale = 5x tolerance
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    let started = false;
+    history.forEach((s, i) => {
+      const v = s[key];
+      if (v === null || v === undefined) return;
+      const x = (i / Math.max(1, DIGEST_HISTORY - 1)) * W;
+      const y = H / 2 - Math.max(-1, Math.min(1, v / scale)) * (H / 2 - 2);
+      if (started) ctx.lineTo(x, y);
+      else {
+        ctx.moveTo(x, y);
+        started = true;
+      }
+    });
+    ctx.stroke();
+  };
+
+  plot('az', azTol, '#39ff8b');
+  plot('gs', gsTol, '#ffc23d');
+}
+
+function cssEscape(s) {
+  return String(s).replace(/["\\]/g, '\\$&');
 }
 
 function drawAzimuth() {
@@ -498,7 +630,6 @@ function renderApproachTable() {
       '<td>' + (ap.azDevDeg > 0 ? 'R' : 'L') + ' ' + Math.abs(ap.azDevDeg).toFixed(2) + '°</td>' +
       '<td>' + gsTxt + '</td>' +
       '<td>' + (t.altFt === null ? '-' : t.altFt) + '</td>' +
-      '<td>' + (ap.gpAltFt === null ? '-' : ap.gpAltFt) + '</td>' +
       '<td>' + (t.vsFpm === null || t.vsFpm === undefined ? '-' : t.vsFpm) + '</td>' +
       '<td>' + (t.gsKt === null ? '-' : t.gsKt) + '</td>' +
       '<td class="' + (onCourse && onGp ? 'guidance-ok' : 'guidance-warn') + '">' +
@@ -508,7 +639,7 @@ function renderApproachTable() {
 
   if (rows.length === 0) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="10" class="empty">no traffic on final</td>';
+    tr.innerHTML = '<td colspan="9" class="empty">no traffic on final</td>';
     tbody.appendChild(tr);
   }
 }
@@ -819,7 +950,6 @@ function renderFieldTable() {
       '<td>' + r.distNm.toFixed(2) + '</td>' +
       '<td>' + fmtBrg(r.brg) + '</td>' +
       '<td>' + (t.altFt === null ? '-' : t.altFt) + '</td>' +
-      '<td>' + (t.approach && t.approach.aboveThrFt !== null ? t.approach.aboveThrFt : '-') + '</td>' +
       '<td>' + (t.vsFpm === null || t.vsFpm === undefined ? '-' : t.vsFpm) + '</td>' +
       '<td>' + (t.gsKt === null ? '-' : t.gsKt) + '</td>';
     tbody.appendChild(tr);
@@ -827,7 +957,7 @@ function renderFieldTable() {
 
   if (rows.length === 0) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="8" class="empty">no traffic within ' + state.twrRangeNm.toFixed(1) + ' nm</td>';
+    tr.innerHTML = '<td colspan="7" class="empty">no traffic within ' + state.twrRangeNm.toFixed(1) + ' nm</td>';
     tbody.appendChild(tr);
   }
 }

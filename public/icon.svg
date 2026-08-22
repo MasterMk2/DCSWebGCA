@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- DCS Web GCA logo: PAR radar scope over a runway -->
+  <defs>
+    <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#39ff8b" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#39ff8b" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="26" fill="#0a0e12"/>
+
+  <!-- range rings -->
+  <circle cx="64" cy="58" r="46" fill="none" stroke="#1d2a36" stroke-width="2.5"/>
+  <circle cx="64" cy="58" r="32" fill="none" stroke="#1d2a36" stroke-width="2.5"/>
+  <circle cx="64" cy="58" r="18" fill="none" stroke="#1d2a36" stroke-width="2.5"/>
+
+  <!-- crosshair -->
+  <line x1="14" y1="58" x2="114" y2="58" stroke="#14202b" stroke-width="2"/>
+  <line x1="64" y1="8" x2="64" y2="108" stroke="#14202b" stroke-width="2"/>
+
+  <!-- radar sweep -->
+  <path d="M64 58 L64 12 A46 46 0 0 1 97 25 Z" fill="url(#sweep)"/>
+  <line x1="64" y1="58" x2="97" y2="25" stroke="#39ff8b" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- runway -->
+  <rect x="60.5" y="66" width="7" height="42" rx="2" fill="#3a5a4a"/>
+  <line x1="64" y1="66" x2="64" y2="104" stroke="#5a6b7a" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+  <!-- aircraft blips -->
+  <path d="M38 38 l4.5 9 l-4.5 -3 l-4.5 3 Z" fill="#39ff8b"/>
+  <circle cx="88" cy="76" r="3.5" fill="#ffc23d"/>
+  <circle cx="45" cy="82" r="3" fill="#39ff8b" opacity="0.7"/>
+</svg>

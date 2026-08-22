@@ -5,14 +5,22 @@ const { EventEmitter } = require('events');
 /**
  * TCP client for the Tacview real-time telemetry stream.
  *
- * Protocol (ACMI real-time): after connecting, the client sends a backslash
- * followed by an optional password and end-of-line to request live telemetry.
- * The host answers with its protocol version (e.g. "V2.2") and starts
- * streaming ACMI text frames.
+ * Handshake (XtraLib protocol): the client sends
+ *
+ *   XtraLib.Stream.0\n
+ *   Tacview.RealTimeTelemetry.0\n
+ *   <client name>\n
+ *   <password>\n
+ *   \0
+ *
+ * The host replies with its own XtraLib header and then starts streaming
+ * ACMI text frames.
  */
 
 const net = require('net');
 const { AcmiParser } = require('./AcmiParser');
+
+const CLIENT_NAME = 'DCSWebGCA';
 
 class TacviewClient extends EventEmitter {
   constructor(cfg) {
@@ -46,8 +54,14 @@ class TacviewClient extends EventEmitter {
     console.log(`[tacview] connecting to ${host}:${port} ...`);
 
     const socket = net.createConnection({ host, port }, () => {
-      console.log('[tacview] connected, requesting real-time telemetry');
-      socket.write(`\\${password || ''}\n`);
+      console.log('[tacview] connected, sending XtraLib handshake');
+      const handshake =
+        `XtraLib.Stream.0\n` +
+        `Tacview.RealTimeTelemetry.0\n` +
+        `${CLIENT_NAME}\n` +
+        `${password || ''}\n` +
+        `\0`;
+      socket.write(handshake);
     });
     this.socket = socket;
 
@@ -55,9 +69,11 @@ class TacviewClient extends EventEmitter {
     socket.on('data', (chunk) => {
       this.buffer += chunk;
       let idx;
+      // ACMI frames are line-based; strip any NUL bytes from the handshake reply
       while ((idx = this.buffer.indexOf('\n')) >= 0) {
-        const line = this.buffer.slice(0, idx).replace(/\r$/, '');
+        const line = this.buffer.slice(0, idx).replace(/\r$/, '').replace(/\0/g, '');
         this.buffer = this.buffer.slice(idx + 1);
+        if (!line) continue;
         try {
           this.parser.handleLine(line);
         } catch (err) {

@@ -4,12 +4,10 @@
  * Real-time PAR talk-down phrase generator.
  *
  * Produces controller-style precision approach messages for each aircraft
- * on final, e.g.:
- *   "Viper-1, 5.2 miles from touchdown, slightly right of course,
- *    turn heading 205, coming high, altitude should be 1900 feet."
- *
- * A message is emitted when an aircraft first appears, when its deviation
- * state changes, or at least every 15 seconds while being talked down.
+ * on final. A message is emitted when an aircraft first appears, when its
+ * deviation state changes, or at least every 15 seconds.
+ * State is tracked per runway so multiple controllers can talk aircraft
+ * down to different runways independently.
  */
 
 const M_PER_NM = 1852;
@@ -18,7 +16,7 @@ const FT_PER_M = 3.28084;
 class Talkdown {
   constructor(cfg) {
     this.cfg = cfg;
-    this.state = new Map(); // track id -> { lastMsgAt, lastKey }
+    this.state = new Map(); // runwayId -> Map(trackId -> { lastMsgAt, lastKey })
   }
 
   resolveRunway(runwayId) {
@@ -31,13 +29,19 @@ class Talkdown {
   }
 
   /**
-   * @param {Array} tracks snapshot tracks (with .approach computed)
+   * @param {Array} tracks snapshot tracks (with .approach computed for runwayId)
    * @param {string} runwayId selected runway id
    * @returns {Array<{time:number, id:string, text:string}>} new messages
    */
   update(tracks, runwayId) {
     const rwy = this.resolveRunway(runwayId);
     if (!rwy) return [];
+
+    let rwyState = this.state.get(rwy.id);
+    if (!rwyState) {
+      rwyState = new Map();
+      this.state.set(rwy.id, rwyState);
+    }
 
     const now = Date.now();
     const msgs = [];
@@ -47,7 +51,7 @@ class Talkdown {
       if (!t.approach) continue;
       seen.add(t.id);
 
-      const st = this.state.get(t.id) || { lastMsgAt: 0, lastKey: '' };
+      const st = rwyState.get(t.id) || { lastMsgAt: 0, lastKey: '' };
       const key = guidanceKey(t.approach);
       const due = now - st.lastMsgAt >= 15000;
       const changed = key !== st.lastKey;
@@ -56,13 +60,13 @@ class Talkdown {
         msgs.push({ time: now, id: t.id, text: buildPhrase(t, t.approach, rwy) });
         st.lastMsgAt = now;
         st.lastKey = key;
-        this.state.set(t.id, st);
+        rwyState.set(t.id, st);
       }
     }
 
     // forget aircraft that left the scope
-    for (const id of [...this.state.keys()]) {
-      if (!seen.has(id)) this.state.delete(id);
+    for (const id of [...rwyState.keys()]) {
+      if (!seen.has(id)) rwyState.delete(id);
     }
     return msgs;
   }

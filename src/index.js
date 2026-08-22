@@ -15,6 +15,8 @@ tacview.on('update', (upd) => store.applyUpdate(upd));
 tacview.on('remove', (id) => store.remove(id));
 tacview.on('global', (k, v) => {
   if (k === 'ReferenceTime') console.log(`[tacview] mission time reference: ${v}`);
+  // ReferenceLongitude/Latitude: ACMI lon/lat are relative to these
+  store.setReference(k, v);
 });
 tacview.start();
 
@@ -31,12 +33,14 @@ server.listen(cfg.server.port, cfg.server.bind, () => {
 const hub = new WsHub(server, store, cfg);
 hub.startBroadcasting(200);
 
-// Real-time PAR talk-down phrase generation (1 Hz)
+// Real-time PAR talk-down phrase generation (1 Hz), per selected runway
 const talkdown = new Talkdown(cfg);
 setInterval(() => {
-  const snap = store.snapshot(hub.selectedRunway);
-  const msgs = talkdown.update(snap.tracks, snap.runway);
-  hub.pushTranscript(msgs);
+  for (const runwayId of hub.activeRunwayIds()) {
+    const snap = store.snapshot(runwayId);
+    const msgs = talkdown.update(snap.tracks, snap.runway);
+    hub.pushTranscript(msgs.map((m) => ({ ...m, runway: snap.runway })));
+  }
 }, 1000);
 
 process.on('SIGINT', () => {

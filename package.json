@@ -1,14 +1,13 @@
 {
   "name": "dcs-web-gca",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Web-based GCA (Ground Controlled Approach) console for DCS World dedicated servers, fed by Tacview ACMI real-time telemetry",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "mock": "node tools/mock-tacview.js",
     "smoke": "node tools/smoke-test.js",
-    "test:parser": "node tools/parser-test.js",
-    "test": "node tools/parser-test.js && node tools/smoke-test.js"
+    "test": "node --test tests/unit.test.js"
   },
   "engines": {
     "node": ">=18"

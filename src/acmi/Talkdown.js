@@ -45,7 +45,7 @@ class Talkdown {
         msgs.push({ time: now, id: t.id, text: buildPhrase(t, ap, rwy) });
         st.lastMsgAt = now;
         st.lastKey = key;
-        rwyState.set(t.id, st);
+        this.state.set(t.id, st);
       }
     }
 

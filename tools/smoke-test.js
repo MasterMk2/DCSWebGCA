@@ -82,7 +82,7 @@ async function main() {
   });
 
   try {
-    const state = await waitForTracks();
+    let state = await waitForTracks();
     if (!state) throw new Error('no tracks received');
 
     // ground speed is derived from position differencing, which needs
@@ -91,6 +91,7 @@ async function main() {
     const res2 = await get('/api/state');
     state = JSON.parse(res2.body);
 
+    let speedOk = true;
     const airborne = state.tracks.filter((t) => t.approach);
     if (airborne.length === 0) throw new Error('tracks have no approach data (runway not resolved?)');
     if (state.tracks.some((t) => t.category === 'Ground')) throw new Error('ground clutter leaked into the console');
@@ -101,7 +102,7 @@ async function main() {
         `  ${t.pilot || t.name}: RNG=${t.approach.rangeNm}nm AZ=${t.approach.azDevDeg}deg ` +
           `GS=${t.approach.gsDevDeg}deg ALT=${t.altFt}ft -> ${t.approach.guidance}`
       );
-      if (t.spdKt === null || t.spdKt === undefined || t.spdKt <= 0) speedOk = false;
+      if (t.gsKt === null || t.gsKt === undefined || t.gsKt <= 0) speedOk = false;
     }
     if (!speedOk) {
       console.error('SMOKE FAIL: ground speed was not derived from position differencing');

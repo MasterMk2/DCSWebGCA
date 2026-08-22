@@ -98,13 +98,14 @@ function collect(lines) {
   };
   const rwy = { id: 'Batumi 31', threshold: thr, headingDeg, glidepathDeg: 3.0, lengthNm: 1.117 };
 
-  // aircraft exactly on centreline and glidepath, 5 nm out
+  // aircraft exactly on centreline and glidepath, 5 nm out on final: it is on
+  // the far side of the threshold from the runway, flying towards it
   const rangeM = 5 * 1852;
   const t = {
     id: 'x',
     category: 'FixedWing',
-    u: thr.z + Math.sin(hRad) * rangeM,
-    v: thr.x + Math.cos(hRad) * rangeM,
+    u: thr.z - Math.sin(hRad) * rangeM,
+    v: thr.x - Math.cos(hRad) * rangeM,
     altM: (thr.altFt + Math.tan((3 * Math.PI) / 180) * rangeM * 3.28084) * 0.3048,
   };
   const ap = store.computeApproach(t, rwy);
@@ -112,6 +113,8 @@ function collect(lines) {
   assert.ok(Math.abs(ap.azDevDeg) < 0.01, `az dev ${ap.azDevDeg}`);
   assert.ok(Math.abs(ap.gsDevDeg) < 0.02, `gs dev ${ap.gsDevDeg}`);
   assert.strictEqual(ap.guidance, 'ON COURSE / ON GLIDEPATH');
+
+  assert.ok(ap.alongNm > 0, `on final must be positive along (${ap.alongNm})`);
 
   // 1 nm right of centreline at 5 nm -> about 11 deg right, "fly left"
   const t2 = Object.assign({}, t, {
@@ -121,6 +124,18 @@ function collect(lines) {
   const ap2 = store.computeApproach(t2, rwy);
   assert.ok(ap2.azDevDeg > 10 && ap2.azDevDeg < 12, `az dev right ${ap2.azDevDeg}`);
   assert.ok(ap2.guidance.startsWith('FLY LEFT'), ap2.guidance);
+
+  // an aircraft sitting on the runway itself is *past* touchdown, not on final
+  const t3 = {
+    id: 'z',
+    category: 'FixedWing',
+    u: thr.z + Math.sin(hRad) * 1000,
+    v: thr.x + Math.cos(hRad) * 1000,
+    altM: thr.altFt * 0.3048,
+  };
+  const ap3 = store.computeApproach(t3, rwy);
+  assert.ok(ap3.alongNm < 0, `over the runway must be negative along (${ap3.alongNm})`);
+  assert.strictEqual(ap3.onFinal, false);
   console.log('ok  approach geometry (native DCS coordinates)');
 }
 

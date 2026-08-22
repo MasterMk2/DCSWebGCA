@@ -32,12 +32,17 @@ const EARTH_M_PER_DEG = 111320;
 const REF_LAT = Math.floor(rwy.threshold.lat);
 const REF_LON = Math.floor(rwy.threshold.lon);
 
+/**
+ * Position an aircraft `alongNm` before the threshold on final, `crossNm` to
+ * the right of the centreline. Traffic on approach is on the *far* side of the
+ * threshold from the runway, i.e. opposite the landing heading.
+ */
 function positionAt(alongNm, crossNm, gsDevDeg, extraAltM = 0) {
   const alongM = alongNm * M_PER_NM;
   const crossM = crossNm * M_PER_NM;
   const hdgRad = (rwy.headingDeg * Math.PI) / 180;
-  const east = alongM * Math.sin(hdgRad) + crossM * Math.cos(hdgRad);
-  const north = alongM * Math.cos(hdgRad) - crossM * Math.sin(hdgRad);
+  const east = -alongM * Math.sin(hdgRad) + crossM * Math.cos(hdgRad);
+  const north = -alongM * Math.cos(hdgRad) - crossM * Math.sin(hdgRad);
 
   const altM =
     rwy.threshold.altFt * M_PER_FT +
@@ -89,7 +94,7 @@ const server = net.createServer((socket) => {
       const cross = 0.25 * Math.sin(t / 9);
       const gsDev = 0.35 * Math.sin(t / 14);
       const p1 = positionAt(along, cross, gsDev);
-      const hdg1 = rwy.headingDeg + 180 + (cross > 0 ? -2 : 2);
+      const hdg1 = rwy.headingDeg + (cross > 0 ? -2 : 2); // correcting back to centreline
 
       // #2 aircraft holding off to the side
       const p2 = positionAt(6 + 2 * Math.sin(t / 30), -2.5, 0, 600);

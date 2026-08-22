@@ -392,6 +392,13 @@ function drawAzimuth() {
   }
   ctx.setLineDash([]);
 
+  // the scope is drawn looking along the approach course, so the upper half is
+  // right of centreline
+  ctx.fillStyle = '#5a6b7a';
+  ctx.font = '11px Consolas, monospace';
+  ctx.fillText('R', padL - 18, padT + plotH * 0.25);
+  ctx.fillText('L', padL - 18, padT + plotH * 0.75);
+
   for (const t of state.tracks) {
     const ap = t.approach;
     if (!ap || ap.alongNm < -0.5 || ap.alongNm > GCA_MAX_RANGE_NM) continue;
@@ -561,7 +568,7 @@ function drawPpi() {
   ctx.lineWidth = 6;
   ctx.beginPath();
   ctx.moveTo(sx(0), sy(0));
-  ctx.lineTo(sx(-Math.sin(hdgRad) * lenM), sy(-Math.cos(hdgRad) * lenM));
+  ctx.lineTo(sx(Math.sin(hdgRad) * lenM), sy(Math.cos(hdgRad) * lenM));
   ctx.stroke();
   ctx.lineWidth = 1.5;
 
@@ -747,20 +754,22 @@ function drawTwrScope() {
   const hdgRad = (rwy.headingDeg * Math.PI) / 180;
   const sinH = Math.sin(hdgRad), cosH = Math.cos(hdgRad);
 
+  // runway: from the threshold along the landing heading
   const lenM = (rwy.lengthNm || 1.2) * M_PER_NM;
   ctx.strokeStyle = '#3a5a4a';
   ctx.lineWidth = 10;
   ctx.beginPath();
   ctx.moveTo(sx(0), sy(0));
-  ctx.lineTo(sx(-sinH * lenM), sy(-cosH * lenM));
+  ctx.lineTo(sx(sinH * lenM), sy(cosH * lenM));
   ctx.stroke();
 
+  // extended centreline: the 5 nm final, on the opposite side of the threshold
   ctx.strokeStyle = '#2a5a3a';
   ctx.setLineDash([8, 8]);
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(sx(0), sy(0));
-  ctx.lineTo(sx(sinH * 5 * M_PER_NM), sy(cosH * 5 * M_PER_NM));
+  ctx.lineTo(sx(-sinH * 5 * M_PER_NM), sy(-cosH * 5 * M_PER_NM));
   ctx.stroke();
   ctx.setLineDash([]);
 

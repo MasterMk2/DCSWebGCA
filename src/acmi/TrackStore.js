@@ -103,10 +103,12 @@ class TrackStore {
     const sinH = Math.sin(hdgRad);
     const cosH = Math.cos(hdgRad);
 
-    // "along" grows towards the aircraft side of the threshold (i.e. out along
-    // the final approach course); "cross" is + to the right of the centreline
-    // as seen by a pilot on final.
-    const along = off.east * sinH + off.north * cosH;
+    // An aircraft landing on this runway flies *towards* the threshold on the
+    // runway heading, so it sits on the far side of it: dot(rel, heading) is
+    // negative on final. "along" is therefore the distance still to fly (PAR's
+    // "miles from touchdown"), positive on approach and negative once over the
+    // runway. "cross" is + to the right of the centreline from the pilot's seat.
+    const along = -(off.east * sinH + off.north * cosH);
     const cross = off.east * cosH - off.north * sinH;
 
     const rangeNm = Math.hypot(off.east, off.north) / M_PER_NM;

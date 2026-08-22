@@ -16,7 +16,8 @@
         "id": "Nellis RWY 21L",
         "threshold": { "lat": 36.2377, "lon": -115.0345, "altFt": 1870 },
         "headingDeg": 210,
-        "glidepathDeg": 3.0
+        "glidepathDeg": 3.0,
+        "lengthNm": 1.2
       }
     ],
     "defaultRunway": "Nellis RWY 21L"

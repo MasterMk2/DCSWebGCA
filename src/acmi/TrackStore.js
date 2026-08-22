@@ -23,7 +23,21 @@ class TrackStore {
       t = { id };
       this.tracks.set(id, t);
     }
+    const prevAltM = t.altM;
+    const prevAltTime = t.lastAltTime;
     Object.assign(t, props);
+
+    // Vertical speed (ft/min) from consecutive altitude samples
+    if (props.altM !== undefined) {
+      const now = Date.now();
+      if (prevAltM !== undefined && prevAltTime && now > prevAltTime) {
+        const dtSec = (now - prevAltTime) / 1000;
+        if (dtSec >= 0.5) {
+          t.vsFpm = Math.round(((props.altM - prevAltM) / M_PER_FT) / (dtSec / 60));
+        }
+      }
+      t.lastAltTime = now;
+    }
     t.lastUpdate = Date.now();
   }
 
@@ -100,6 +114,7 @@ class TrackStore {
         altFt: t.altM !== undefined ? Math.round(t.altM / M_PER_FT) : null,
         hdg: t.hdg !== undefined ? Math.round(t.hdg) : null,
         iasKt: t.IAS ? Math.round(parseFloat(t.IAS) * 1.94384) : null,
+        vsFpm: t.vsFpm !== undefined ? t.vsFpm : null,
       };
       if (rwy && this.isAirborne(t)) {
         rec.approach = this.computeApproach(t, rwy);

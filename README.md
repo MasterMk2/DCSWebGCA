@@ -76,7 +76,27 @@ cp config/config.example.json config/config.json
 - `tacview.password`: Tacview のリアルタイム配信にパスワードを設定している場合は記入。
 - `gca.runways`: 管制対象の滑走路を緯度経度・標高・方位・グライドパス角・長さ (`lengthNm`) で定義 (複数可)。
 
-### 3. systemd 登録
+### 3. Docker で実行する場合
+
+公式イメージを GHCR から取得して起動できます (main ブランチ push 時に GitHub Actions が自動ビルド):
+
+```bash
+mkdir -p config
+cp config/config.example.json config/config.json   # リポジトリを clone した場合
+vi config/config.json                              # 滑走路定義などを編集
+
+docker compose up -d
+```
+
+- `docker-compose.yml` は `ghcr.io/mastermk2/dcswebgca:latest` を使用します
+- DCS + Tacview が同一ホストの場合は `TACVIEW_HOST=host.docker.internal` のままで OK (`extra_hosts: host-gateway` 済み)
+- 別ホストの DCS サーバーに接続する場合は `TACVIEW_HOST` にその IP を指定
+- 設定は `./config` をボリュームマウントして反映
+- 手動ビルドの場合: `docker build -t dcs-web-gca . && docker run -p 8080:8080 -v ./config:/app/config:ro dcs-web-gca`
+
+nginx からのプロキシ先を `http://127.0.0.1:8080` にするだけで、以降の手順 (nginx 設定) は systemd 版と共通です。
+
+### 4. systemd 登録 (Docker 不使用の場合)
 
 ```bash
 sudo cp deploy/dcswebgca.service /etc/systemd/system/
@@ -84,7 +104,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dcswebgca
 ```
 
-### 4. nginx (HTTPS)
+### 5. nginx (HTTPS)
 
 既存の HTTPS server ブロックに `deploy/nginx-gca.conf` の内容を取り込みます:
 

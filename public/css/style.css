@@ -76,6 +76,20 @@ h2 { font-size: 0.8rem; color: var(--dim); margin: 0 0 6px 0; text-transform: up
   gap: 16px;
 }
 
+.scope-panel, .table-panel {
+  background: var(--panel);
+  border: 1px solid #1d2a36;
+  padding: 12px;
+}
+
+canvas { display: block; width: 100%; height: auto; background: #060a0d; cursor: crosshair; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #1d2a36; }
+th { color: var(--dim); font-weight: normal; text-transform: uppercase; font-size: 0.7rem; }
+td.guidance-ok { color: var(--green); }
+td.guidance-warn { color: var(--amber); }
+
 .gci-controls {
   display: flex;
   align-items: center;
@@ -105,23 +119,6 @@ h2 { font-size: 0.8rem; color: var(--dim); margin: 0 0 6px 0; text-transform: up
 .info-grid .cell .k { color: var(--dim); font-size: 0.7rem; text-transform: uppercase; }
 .info-grid .cell .v { color: var(--green); margin-top: 4px; }
 
-.scope-panel, .table-panel {
-  background: var(--panel);
-  border: 1px solid #1d2a36;
-  padding: 12px;
-}
-
-canvas { display: block; width: 100%; height: auto; background: #060a0d; cursor: crosshair; }
-
-/* 10 列の Approach Data が HD レイアウトの右カラム (360-460px) では収まらないので、
-   切り落とさずに横スクロールさせる */
-.table-panel { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #1d2a36; }
-th { color: var(--dim); font-weight: normal; text-transform: uppercase; font-size: 0.7rem; }
-td.guidance-ok { color: var(--green); }
-td.guidance-warn { color: var(--amber); }
-
 .log-panel {
   max-height: 220px;
   overflow-y: auto;
@@ -132,43 +129,48 @@ td.guidance-warn { color: var(--amber); }
 .log-line { white-space: pre-wrap; }
 .log-time { color: var(--dim); margin-right: 8px; }
 
-.controls button {
-  background: #16202a;
-  color: var(--text);
-  border: 1px solid #2a3a4a;
-  padding: 3px 9px;
-  font-family: inherit;
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-.controls button:hover { color: var(--green); border-color: #2a5a3a; }
-.controls optgroup { color: var(--dim); }
+/* ---------- approach digest ---------- */
 
-.info-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20px;
-  padding: 6px 20px;
+.digest-panel { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; }
+.digest-empty { color: var(--dim); font-size: 0.8rem; }
+
+.digest-row {
+  padding: 8px;
   background: #0c1218;
-  border-bottom: 1px solid #1d2a36;
-  font-size: 0.75rem;
-  color: var(--dim);
+  border: 1px solid #1d2a36;
 }
-.info-bar #runwayInfo { color: var(--green); }
 
-td.empty { color: var(--dim); text-align: center; }
+.digest-head { display: flex; align-items: center; gap: 10px; }
+.digest-callsign { color: var(--text); font-size: 0.9rem; }
+.digest-status { color: var(--dim); font-size: 0.7rem; text-transform: uppercase; }
+
+.grade {
+  margin-left: auto;
+  padding: 1px 8px;
+  font-size: 0.7rem;
+  border: 1px solid;
+  border-radius: 3px;
+}
+.grade-good { color: var(--green); border-color: var(--green); }
+.grade-fair { color: var(--amber); border-color: var(--amber); }
+.grade-poor { color: var(--red); border-color: var(--red); }
+
+.digest-stats { color: var(--dim); font-size: 0.72rem; margin: 4px 0; }
+
+.sparkline { display: block; width: 100%; height: 40px; background: #060a0d; }
 
 /* ---------- HD / wide-screen layout ---------- */
 
-/* GCA: scopes on the left, log + table on the right */
+/* GCA: scopes on the left, log + digest + table on the right */
 @media (min-width: 1100px) {
   #mode-gca main {
-    grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
   }
   #mode-gca section.scope-panel:nth-of-type(1) { grid-column: 1; grid-row: 1; }
   #mode-gca section.scope-panel:nth-of-type(2) { grid-column: 1; grid-row: 2; }
   #mode-gca section.table-panel:nth-of-type(3) { grid-column: 2; grid-row: 1; }
   #mode-gca section.table-panel:nth-of-type(4) { grid-column: 2; grid-row: 2; }
+  #mode-gca section.table-panel:nth-of-type(5) { grid-column: 2; grid-row: 3; }
 }
 
 /* GCI: solution panel beside the scope on very wide screens */

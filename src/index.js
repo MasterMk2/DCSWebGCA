@@ -3,6 +3,7 @@
 const config = require('./config');
 const { TacviewClient } = require('./acmi/TacviewClient');
 const { TrackStore } = require('./acmi/TrackStore');
+const { Talkdown } = require('./acmi/Talkdown');
 const { createServer } = require('./web/httpServer');
 const { WsHub } = require('./net/WsHub');
 
@@ -29,6 +30,14 @@ server.listen(cfg.server.port, cfg.server.bind, () => {
 
 const hub = new WsHub(server, store, cfg);
 hub.startBroadcasting(200);
+
+// Real-time PAR talk-down phrase generation (1 Hz)
+const talkdown = new Talkdown(cfg);
+setInterval(() => {
+  const snap = store.snapshot(hub.selectedRunway);
+  const msgs = talkdown.update(snap.tracks, snap.runway);
+  hub.pushTranscript(msgs);
+}, 1000);
 
 process.on('SIGINT', () => {
   console.log('\n[main] shutting down');

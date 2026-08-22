@@ -13,6 +13,7 @@ class WsHub {
     this.store = store;
     this.cfg = cfg;
     this.selectedRunway = cfg.gca.defaultRunway;
+    this.transcript = []; // recent talk-down messages for late joiners
 
     this.wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
@@ -20,6 +21,9 @@ class WsHub {
       console.log(`[ws] client connected (total: ${this.wss.clients.size})`);
       ws.send(JSON.stringify({ type: 'hello', runways: cfg.gca.runways.map((r) => r.id), runway: this.selectedRunway }));
       ws.send(JSON.stringify({ type: 'tracks', ...store.snapshot(this.selectedRunway) }));
+      if (this.transcript.length > 0) {
+        ws.send(JSON.stringify({ type: 'transcript', messages: this.transcript }));
+      }
 
       ws.on('message', (data) => {
         try {
@@ -42,6 +46,15 @@ class WsHub {
     for (const client of this.wss.clients) {
       if (client.readyState === 1) client.send(data);
     }
+  }
+
+  pushTranscript(messages) {
+    if (!messages || messages.length === 0) return;
+    this.transcript.push(...messages);
+    if (this.transcript.length > 100) {
+      this.transcript.splice(0, this.transcript.length - 100);
+    }
+    this.broadcast({ type: 'transcript', messages });
   }
 
   startBroadcasting(intervalMs = 200) {

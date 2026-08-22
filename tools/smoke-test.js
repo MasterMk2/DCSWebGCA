@@ -2,7 +2,8 @@
 
 /**
  * End-to-end smoke test: starts the mock Tacview server and the GCA server
- * as child processes, then verifies /api/state returns live tracks.
+ * as child processes, then verifies /api/state returns live tracks with
+ * derived ground speed.
  * Run: node tools/smoke-test.js
  */
 
@@ -56,12 +57,24 @@ async function main() {
       return;
     }
 
+    // ground speed is derived from position differencing, which needs
+    // at least ~0.5 s of samples; give the pipeline a moment
+    await new Promise((r) => setTimeout(r, 1500));
+    const res2 = await get('/api/state');
+    state = JSON.parse(res2.body);
+
     const airborne = state.tracks.filter((t) => t.approach);
     console.log(`SMOKE OK: ${state.tracks.length} tracks, ${airborne.length} airborne`);
+    let speedOk = true;
     for (const t of airborne) {
       console.log(
-        `  ${t.pilot || t.name}: RNG=${t.approach.rangeNm}nm AZ=${t.approach.azDevDeg}deg GS=${t.approach.gsDevDeg}deg -> ${t.approach.guidance}`
+        `  ${t.pilot || t.name}: RNG=${t.approach.rangeNm}nm AZ=${t.approach.azDevDeg}deg GS=${t.approach.gsDevDeg}deg SPD=${t.spdKt ?? '-'}kt GC=${t.gc ?? '-'} -> ${t.approach.guidance}`
       );
+      if (t.spdKt === null || t.spdKt === undefined || t.spdKt <= 0) speedOk = false;
+    }
+    if (!speedOk) {
+      console.error('SMOKE FAIL: ground speed was not derived from position differencing');
+      process.exitCode = 1;
     }
   } finally {
     mock.kill();

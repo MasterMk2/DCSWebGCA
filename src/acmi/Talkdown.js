@@ -3,64 +3,52 @@
 /**
  * Real-time PAR talk-down phrase generator.
  *
- * Produces controller-style precision approach messages for each aircraft
- * on final, e.g.:
+ * Produces controller-style precision approach calls for aircraft on final:
+ *
  *   "Viper-1, 5.2 miles from touchdown, slightly right of course,
  *    turn heading 205, coming high, altitude should be 1900 feet."
  *
- * A message is emitted when an aircraft first appears, when its deviation
- * state changes, or at least every 15 seconds while being talked down.
+ * A call is emitted when an aircraft joins final, when its deviation state
+ * changes, or every `intervalMs` while it is being talked down.
  */
-
-const M_PER_NM = 1852;
-const FT_PER_M = 3.28084;
 
 class Talkdown {
   constructor(cfg) {
     this.cfg = cfg;
+    this.intervalMs = (cfg.gca.talkdownIntervalSec || 15) * 1000;
+    this.maxRangeNm = cfg.gca.talkdownMaxRangeNm || 12;
     this.state = new Map(); // track id -> { lastMsgAt, lastKey }
-  }
-
-  resolveRunway(runwayId) {
-    const g = this.cfg.gca;
-    return (
-      g.runways.find((r) => r.id === runwayId) ||
-      g.runways.find((r) => r.id === g.defaultRunway) ||
-      g.runways[0]
-    );
   }
 
   /**
    * @param {Array} tracks snapshot tracks (with .approach computed)
-   * @param {string} runwayId selected runway id
+   * @param {Object} rwy   runway definition the snapshot was computed against
    * @returns {Array<{time:number, id:string, text:string}>} new messages
    */
-  update(tracks, runwayId) {
-    const rwy = this.resolveRunway(runwayId);
+  update(tracks, rwy) {
     if (!rwy) return [];
-
     const now = Date.now();
     const msgs = [];
     const seen = new Set();
 
     for (const t of tracks) {
-      if (!t.approach) continue;
+      const ap = t.approach;
+      if (!ap || !ap.onFinal || t.onGround) continue;
+      if (ap.rangeNm > this.maxRangeNm) continue;
       seen.add(t.id);
 
       const st = this.state.get(t.id) || { lastMsgAt: 0, lastKey: '' };
-      const key = guidanceKey(t.approach);
-      const due = now - st.lastMsgAt >= 15000;
-      const changed = key !== st.lastKey;
+      const key = guidanceKey(ap, this.cfg.gca);
+      const due = now - st.lastMsgAt >= this.intervalMs;
 
-      if (!st.lastKey || due || changed) {
-        msgs.push({ time: now, id: t.id, text: buildPhrase(t, t.approach, rwy) });
+      if (!st.lastKey || due || key !== st.lastKey) {
+        msgs.push({ time: now, id: t.id, text: buildPhrase(t, ap, rwy) });
         st.lastMsgAt = now;
         st.lastKey = key;
         this.state.set(t.id, st);
       }
     }
 
-    // forget aircraft that left the scope
     for (const id of [...this.state.keys()]) {
       if (!seen.has(id)) this.state.delete(id);
     }
@@ -68,10 +56,10 @@ class Talkdown {
   }
 }
 
-function guidanceKey(ap) {
-  const az = Math.abs(ap.azDevDeg) < 0.8 ? 'OK' : ap.azDevDeg > 0 ? 'R' : 'L';
+function guidanceKey(ap, gca) {
+  const az = Math.abs(ap.azDevDeg) < gca.azToleranceDeg ? 'OK' : ap.azDevDeg > 0 ? 'R' : 'L';
   const gs =
-    ap.gsDevDeg === null ? '?' : Math.abs(ap.gsDevDeg) < 0.4 ? 'OK' : ap.gsDevDeg > 0 ? 'H' : 'LOW';
+    ap.gsDevDeg === null ? '?' : Math.abs(ap.gsDevDeg) < gca.gsToleranceDeg ? 'OK' : ap.gsDevDeg > 0 ? 'H' : 'LOW';
   const band = ap.rangeNm < 1 ? 'SHORT' : ap.rangeNm < 5 ? 'MID' : 'FAR';
   return az + '/' + gs + '/' + band;
 }
@@ -84,7 +72,6 @@ function buildPhrase(t, ap, rwy) {
   const cs = t.pilot || t.name || t.id;
   const parts = [`${cs}, ${ap.rangeNm.toFixed(1)} miles from touchdown`];
 
-  // lateral guidance
   if (Math.abs(ap.azDevDeg) < 0.8) {
     parts.push('on course');
   } else {
@@ -95,21 +82,17 @@ function buildPhrase(t, ap, rwy) {
     );
   }
 
-  // vertical guidance
   if (ap.gsDevDeg === null) {
     parts.push('report altitude');
   } else if (Math.abs(ap.gsDevDeg) < 0.4) {
     parts.push('on glidepath');
   } else {
-    const alongM = ap.alongNm * M_PER_NM;
-    const shouldFt =
-      Math.round(
-        (Math.tan((rwy.glidepathDeg * Math.PI) / 180) * alongM * FT_PER_M + rwy.threshold.altFt) / 100
-      ) * 100;
-    parts.push(`coming ${ap.gsDevDeg > 0 ? 'high' : 'low'}, altitude should be ${shouldFt} feet`);
+    const shouldFt = ap.gpAltFt !== null ? Math.round(ap.gpAltFt / 100) * 100 : null;
+    parts.push(
+      `coming ${ap.gsDevDeg > 0 ? 'high' : 'low'}` + (shouldFt !== null ? `, altitude should be ${shouldFt} feet` : '')
+    );
   }
 
-  // short-final calls
   if (ap.rangeNm < 0.5) parts.push('over threshold, check runway in sight');
   else if (ap.rangeNm < 1) parts.push('one mile, runway should be in sight');
 

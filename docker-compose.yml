@@ -8,13 +8,26 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # DCS server address as seen from the container.
+      # Single-server quick start: point the first source at your DCS host.
       # If DCS + Tacview run on the SAME host, keep host.docker.internal
       # (enabled by extra_hosts below). Otherwise set the DCS server IP.
       TACVIEW_HOST: host.docker.internal
       TACVIEW_PORT: "34250"
       # TACVIEW_PASSWORD: changeme
+      #
+      # Multiple servers, or runway geometry pulled from DCS through
+      # DCSServerBot, are configured in ./config/config.json instead
+      # (see config/config.example.json). Keep the API key out of the file:
+      # DCSSB_BASE_URL: http://dcsserverbot:9876
+      # DCSSB_API_KEY: xxxxx
     volumes:
       - ./config:/app/config:ro
+      # Runway geometry cache, keyed by theatre. Persisting it means the
+      # airbase sweep (which runs Lua inside the sim thread) happens once
+      # per map, ever.
+      - gca_cache:/app/cache
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  gca_cache:

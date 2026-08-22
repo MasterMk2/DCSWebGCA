@@ -1,112 +1,167 @@
 'use strict';
 
 /**
- * Parser for ACMI 2.2 text streams (line-based).
+ * Parser for the ACMI 2.x flight-recording text format as emitted by the DCS
+ * Tacview exporter (`tacviewRealTimeTelemetryEnabled`).
  *
- * Line kinds:
- *   V2.2                          -> protocol version
- *   #123.45                       -> global time update
- *   Key=Value                     -> global property (object 0, e.g. ReferenceLongitude)
- *   T=<id>|<prop>=<value>|...     -> object update (prop "T" is the transform)
- *   -<id>                         -> object removal
+ * Line kinds actually seen on the wire:
  *
- * Transform fields (comma separated, empty = unchanged):
- *   0 Longitude  1 Latitude  2 Altitude(m)  3 Roll  4 Pitch  5 Yaw
- *   6 U  7 V  8 Heading(track)
+ *   FileType=text/acmi/tacview          file header
+ *   FileVersion=2.2
+ *   0,ReferenceLatitude=38              global property (object id 0)
+ *   0,Title=FFS-CaucasusFreeFlight...
+ *   #36568.57                           frame time (sec since ReferenceTime)
+ *   29502,T=4.73|3.57|2286|-0.6|4.6|129.8|545654|-366511.31|124.6,Type=Air+FixedWing,Name=F-16C
+ *   29502,T=|||545691.5|-366535.78      partial update (unchanged fields empty)
+ *   -29502                              object destroyed / left the scene
+ *
+ * Notes that matter and that a "looks about right" parser gets wrong:
+ *
+ *  - Properties are comma separated; the transform sub-fields are pipe separated
+ *    (not the other way round).
+ *  - The transform has three valid shapes and the meaning of a field depends on
+ *    how many fields the line carries:
+ *        3 -> lon | lat | alt
+ *        5 -> lon | lat | alt | u | v
+ *        9 -> lon | lat | alt | roll | pitch | yaw | u | v | heading
+ *    Blindly indexing a 5-field transform as if it were the 9-field one puts the
+ *    native coordinates into roll/pitch.
+ *  - lon/lat are *relative* to ReferenceLongitude / ReferenceLatitude.
+ *  - u/v are the recording's native cartesian coordinates. For DCS these are the
+ *    mission coordinates in metres: u = DCS z (east), v = DCS x (north). They are
+ *    what the mission scripting API (and therefore DCSServerBot's runway data)
+ *    reports, so they let us do the approach geometry without any projection.
+ *  - Commas, backslashes and newlines inside property values are backslash
+ *    escaped; a value may continue onto the next physical line (mission briefings
+ *    do this constantly).
  */
 
 const { EventEmitter } = require('events');
-
-const TRANSFORM_KEYS = ['lon', 'lat', 'altM', 'roll', 'pitch', 'yaw', 'u', 'v', 'hdg'];
 
 class AcmiParser extends EventEmitter {
   constructor() {
     super();
     this.global = {};
+    this.reference = { lat: 0, lon: 0 };
+    this.pending = null; // partial line held back by a trailing escape
   }
 
-  handleLine(line) {
+  reset() {
+    this.global = {};
+    this.reference = { lat: 0, lon: 0 };
+    this.pending = null;
+  }
+
+  handleLine(rawLine) {
+    let line = rawLine;
+
+    // A value continued on the next physical line ends with an *odd* number of
+    // backslashes; join and wait for the rest.
+    if (this.pending !== null) {
+      line = this.pending + '\n' + line;
+      this.pending = null;
+    }
+    if (endsWithOddBackslash(line)) {
+      this.pending = line;
+      return;
+    }
     if (!line) return;
 
-    if (line[0] === '#') {
+    const c = line[0];
+
+    if (c === '#') {
       const t = parseFloat(line.slice(1));
       if (!Number.isNaN(t)) this.emit('time', t);
       return;
     }
 
-    if (line.startsWith('T=')) {
-      this.parseObjectUpdate(line.slice(2));
+    if (c === '-') {
+      const id = line.slice(1).trim();
+      if (id) this.emit('remove', id);
       return;
     }
 
-    if (line[0] === '-') {
-      this.emit('remove', line.slice(1));
+    if (line.startsWith('FileType=') || line.startsWith('FileVersion=')) {
+      this.emit('header', line);
       return;
     }
 
-    if (line[0] === 'V' && /^V\d/.test(line)) {
-      this.emit('version', line);
-      return;
-    }
-
-    // Global property (Key=Value). Skip binary escape lines starting with '\'.
-    if (line[0] === '\\') return;
-    const eq = line.indexOf('=');
-    if (eq > 0) {
-      const key = line.slice(0, eq);
-      const val = line.slice(eq + 1);
-      this.global[key] = val;
-      this.emit('global', key, val);
-    }
-  }
-
-  parseObjectUpdate(body) {
-    const fields = body.split('|');
-    let id = fields.shift();
+    const fields = splitEscaped(line, ',');
+    const id = fields.shift();
     if (!id) return;
 
-    // Optional /A (added) or /X (removed) event suffix
-    let removed = false;
-    if (id.endsWith('/X')) {
-      removed = true;
-      id = id.slice(0, -2);
-    } else if (id.endsWith('/A')) {
-      id = id.slice(0, -2);
-    }
-    id = id.trim();
-    if (!id) return;
-
-    if (removed) {
-      this.emit('remove', id);
+    if (id === '0') {
+      for (const f of fields) {
+        const eq = f.indexOf('=');
+        if (eq <= 0) continue;
+        const key = f.slice(0, eq);
+        const val = unescapeValue(f.slice(eq + 1));
+        this.global[key] = val;
+        if (key === 'ReferenceLatitude') this.reference.lat = parseFloat(val) || 0;
+        if (key === 'ReferenceLongitude') this.reference.lon = parseFloat(val) || 0;
+        this.emit('global', key, val);
+      }
       return;
     }
 
     const props = {};
-    for (const field of fields) {
-      const eq = field.indexOf('=');
+    for (const f of fields) {
+      const eq = f.indexOf('=');
       if (eq <= 0) continue;
-      const key = field.slice(0, eq);
-      const val = field.slice(eq + 1);
-      if (key === 'T') {
-        this.applyTransform(props, val);
-      } else {
-        props[key] = val;
-      }
+      const key = f.slice(0, eq);
+      const val = f.slice(eq + 1);
+      if (key === 'T') this.applyTransform(props, val);
+      else props[key] = unescapeValue(val);
     }
-    if (Object.keys(props).length > 0) {
-      this.emit('object', { id, props });
-    }
+    if (Object.keys(props).length > 0) this.emit('object', { id, props });
   }
 
   applyTransform(props, val) {
-    const parts = val.split(',');
-    for (let i = 0; i < Math.min(parts.length, TRANSFORM_KEYS.length); i++) {
-      const raw = parts[i];
-      if (raw === '') continue;
-      const num = parseFloat(raw);
-      if (!Number.isNaN(num)) props[TRANSFORM_KEYS[i]] = num;
+    const raw = val.split('|');
+    const n = raw.length;
+    let keys;
+    if (n <= 3) keys = ['lonRel', 'latRel', 'altM'];
+    else if (n <= 5) keys = ['lonRel', 'latRel', 'altM', 'u', 'v'];
+    else keys = ['lonRel', 'latRel', 'altM', 'roll', 'pitch', 'yaw', 'u', 'v', 'hdg'];
+
+    for (let i = 0; i < Math.min(n, keys.length); i++) {
+      if (raw[i] === '') continue;
+      const num = parseFloat(raw[i]);
+      if (!Number.isNaN(num)) props[keys[i]] = num;
     }
+    if (props.lonRel !== undefined) props.lon = this.reference.lon + props.lonRel;
+    if (props.latRel !== undefined) props.lat = this.reference.lat + props.latRel;
   }
 }
 
-module.exports = { AcmiParser };
+function endsWithOddBackslash(s) {
+  let n = 0;
+  for (let i = s.length - 1; i >= 0 && s[i] === '\\'; i--) n++;
+  return n % 2 === 1;
+}
+
+/** split on `sep`, honouring backslash escapes */
+function splitEscaped(s, sep) {
+  const out = [];
+  let cur = '';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '\\' && i + 1 < s.length) {
+      cur += ch + s[i + 1];
+      i++;
+    } else if (ch === sep) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function unescapeValue(s) {
+  return s.replace(/\\([\s\S])/g, (_, c) => (c === 'n' || c === '\n' ? '\n' : c));
+}
+
+module.exports = { AcmiParser, splitEscaped, unescapeValue };

@@ -68,7 +68,13 @@ h2 { font-size: 0.8rem; color: var(--dim); margin: 0 0 6px 0; text-transform: up
   border-color: #2a5a3a;
 }
 
-.mode main { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+.mode main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  padding: 16px 20px;
+  gap: 16px;
+}
 
 .gci-controls {
   display: flex;
@@ -105,8 +111,11 @@ h2 { font-size: 0.8rem; color: var(--dim); margin: 0 0 6px 0; text-transform: up
   padding: 12px;
 }
 
-canvas { display: block; width: 100%; height: auto; background: #060a0d; }
+canvas { display: block; width: 100%; height: auto; background: #060a0d; cursor: crosshair; }
 
+/* 10 列の Approach Data が HD レイアウトの右カラム (360-460px) では収まらないので、
+   切り落とさずに横スクロールさせる */
+.table-panel { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #1d2a36; }
 th { color: var(--dim); font-weight: normal; text-transform: uppercase; font-size: 0.7rem; }
@@ -122,3 +131,61 @@ td.guidance-warn { color: var(--amber); }
 
 .log-line { white-space: pre-wrap; }
 .log-time { color: var(--dim); margin-right: 8px; }
+
+.controls button {
+  background: #16202a;
+  color: var(--text);
+  border: 1px solid #2a3a4a;
+  padding: 3px 9px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.controls button:hover { color: var(--green); border-color: #2a5a3a; }
+.controls optgroup { color: var(--dim); }
+
+.info-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 6px 20px;
+  background: #0c1218;
+  border-bottom: 1px solid #1d2a36;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+.info-bar #runwayInfo { color: var(--green); }
+
+td.empty { color: var(--dim); text-align: center; }
+
+/* ---------- HD / wide-screen layout ---------- */
+
+/* GCA: scopes on the left, log + table on the right */
+@media (min-width: 1100px) {
+  #mode-gca main {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
+  }
+  #mode-gca section.scope-panel:nth-of-type(1) { grid-column: 1; grid-row: 1; }
+  #mode-gca section.scope-panel:nth-of-type(2) { grid-column: 1; grid-row: 2; }
+  #mode-gca section.table-panel:nth-of-type(3) { grid-column: 2; grid-row: 1; }
+  #mode-gca section.table-panel:nth-of-type(4) { grid-column: 2; grid-row: 2; }
+}
+
+/* GCI: solution panel beside the scope on very wide screens */
+@media (min-width: 1400px) {
+  #mode-gci main {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+  }
+  #mode-gci section.scope-panel { grid-column: 1; grid-row: 1; }
+  #mode-gci section.table-panel { grid-column: 2; grid-row: 1; }
+  #mode-gci canvas { max-width: 900px; margin: 0 auto; }
+}
+
+/* TWR: field table beside the scope */
+@media (min-width: 1400px) {
+  #mode-twr main {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+  }
+  #mode-twr section.scope-panel { grid-column: 1; grid-row: 1; }
+  #mode-twr section.table-panel { grid-column: 2; grid-row: 1; }
+}

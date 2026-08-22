@@ -1,69 +1,186 @@
 'use strict';
 
 /**
- * WebSocket hub: broadcasts track snapshots to connected browsers.
- * Clients may send { "type": "selectRunway", "runway": "<id>" } to switch
- * the reference runway used for GCA guidance computation.
+ * WebSocket hub.
+ *
+ * Every browser picks its own (server, runway) pair — a controller working
+ * Batumi on server 1 must not have their scope yanked around because someone
+ * else switched to Kutaisi on server 2. Snapshots are therefore computed once
+ * per *distinct* subscription and fanned out to its subscribers.
+ *
+ * client -> server : {type:'subscribe', source, runway} | {type:'selectRunway', runway}
+ * server -> client : hello | sources | runways | tracks | transcript
  */
 
 const { WebSocketServer } = require('ws');
 
+const TALKDOWN_EVERY_MS = 1000;
+
 class WsHub {
-  constructor(httpServer, store, cfg) {
-    this.store = store;
+  constructor(httpServer, sources, cfg) {
+    this.sources = sources; // Map<id, DcsSource>
     this.cfg = cfg;
-    this.selectedRunway = cfg.gca.defaultRunway;
-    this.transcript = []; // recent talk-down messages for late joiners
+    this.clients = new Map(); // ws -> { sourceId, runwayId }
+    this.lastTalkdownAt = 0;
 
     this.wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+    this.wss.on('connection', (ws) => this.onConnection(ws));
+  }
 
-    this.wss.on('connection', (ws) => {
-      console.log(`[ws] client connected (total: ${this.wss.clients.size})`);
-      ws.send(JSON.stringify({ type: 'hello', runways: cfg.gca.runways.map((r) => r.id), runway: this.selectedRunway }));
-      ws.send(JSON.stringify({ type: 'tracks', ...store.snapshot(this.selectedRunway) }));
-      if (this.transcript.length > 0) {
-        ws.send(JSON.stringify({ type: 'transcript', messages: this.transcript }));
-      }
+  get sourceList() {
+    return [...this.sources.values()];
+  }
 
-      ws.on('message', (data) => {
-        try {
-          const msg = JSON.parse(data.toString());
-          if (msg.type === 'selectRunway' && cfg.gca.runways.some((r) => r.id === msg.runway)) {
-            this.selectedRunway = msg.runway;
-            this.broadcast({ type: 'runwayChanged', runway: this.selectedRunway });
-          }
-        } catch {
-          /* ignore malformed messages */
-        }
-      });
+  onConnection(ws) {
+    const first = this.sourceList[0];
+    const state = { sourceId: first ? first.id : null, runwayId: first ? first.defaultRunwayId() : null };
+    this.clients.set(ws, state);
 
-      ws.on('close', () => console.log(`[ws] client disconnected (total: ${this.wss.clients.size})`));
+    send(ws, {
+      type: 'hello',
+      gca: {
+        azToleranceDeg: this.cfg.gca.azToleranceDeg,
+        gsToleranceDeg: this.cfg.gca.gsToleranceDeg,
+      },
+      sources: this.sourceList.map((s) => s.status),
+      source: state.sourceId,
+      runway: state.runwayId,
     });
-  }
+    this.sendRunways(ws, state);
 
-  broadcast(msg) {
-    const data = JSON.stringify(msg);
-    for (const client of this.wss.clients) {
-      if (client.readyState === 1) client.send(data);
-    }
-  }
-
-  pushTranscript(messages) {
-    if (!messages || messages.length === 0) return;
-    this.transcript.push(...messages);
-    if (this.transcript.length > 100) {
-      this.transcript.splice(0, this.transcript.length - 100);
-    }
-    this.broadcast({ type: 'transcript', messages });
-  }
-
-  startBroadcasting(intervalMs = 200) {
-    setInterval(() => {
-      if (this.wss.clients.size > 0) {
-        this.broadcast({ type: 'tracks', ...this.store.snapshot(this.selectedRunway) });
+    ws.on('message', (data) => {
+      let msg;
+      try {
+        msg = JSON.parse(data.toString());
+      } catch {
+        return;
       }
-    }, intervalMs);
+      this.onMessage(ws, msg);
+    });
+    ws.on('close', () => this.clients.delete(ws));
+    ws.on('error', () => ws.close());
   }
+
+  onMessage(ws, msg) {
+    const state = this.clients.get(ws);
+    if (!state) return;
+
+    if (msg.type === 'subscribe') {
+      if (msg.source && this.sources.has(msg.source)) {
+        state.sourceId = msg.source;
+        state.runwayId = null;
+      }
+      const src = this.sources.get(state.sourceId);
+      if (!src) return;
+      state.runwayId =
+        (msg.runway && src.runwayProvider.find(msg.runway) ? msg.runway : null) || src.defaultRunwayId();
+      this.sendRunways(ws, state);
+      return;
+    }
+
+    if (msg.type === 'selectRunway') {
+      const src = this.sources.get(state.sourceId);
+      if (src && src.runwayProvider.find(msg.runway)) {
+        state.runwayId = msg.runway;
+        this.sendRunways(ws, state);
+      }
+      return;
+    }
+
+    if (msg.type === 'refreshRunways') {
+      const src = this.sources.get(state.sourceId);
+      if (src) src.runwayProvider.refresh().then(() => this.sendRunways(ws, state));
+    }
+  }
+
+  sendRunways(ws, state) {
+    const src = this.sources.get(state.sourceId);
+    if (!src) return;
+    send(ws, {
+      type: 'runways',
+      source: src.id,
+      runways: src.runways,
+      runway: state.runwayId,
+      status: src.status,
+    });
+    const transcript = src.transcript(state.runwayId);
+    send(ws, { type: 'transcript', reset: true, messages: transcript });
+  }
+
+  /** group live clients by their (source, runway) subscription */
+  subscriptions() {
+    const groups = new Map();
+    for (const [ws, state] of this.clients) {
+      if (ws.readyState !== 1) continue;
+      const src = this.sources.get(state.sourceId);
+      if (!src) continue;
+      const key = `${state.sourceId} ${state.runwayId}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = { source: src, runwayId: state.runwayId, clients: [] };
+        groups.set(key, g);
+      }
+      g.clients.push(ws);
+    }
+    return groups;
+  }
+
+  tick() {
+    const groups = this.subscriptions();
+    const doTalkdown = Date.now() - this.lastTalkdownAt >= TALKDOWN_EVERY_MS;
+    const watched = new Map(); // sourceId -> Set(runwayId)
+
+    for (const g of groups.values()) {
+      const snap = g.source.snapshot(g.runwayId);
+      const payload = JSON.stringify({
+        type: 'tracks',
+        source: g.source.id,
+        runway: snap.runway ? snap.runway.id : null,
+        time: snap.time,
+        counts: snap.counts,
+        connected: g.source.client.connected,
+        tracks: snap.tracks,
+      });
+      for (const ws of g.clients) if (ws.readyState === 1) ws.send(payload);
+
+      if (!watched.has(g.source.id)) watched.set(g.source.id, new Set());
+      if (snap.runway) watched.get(g.source.id).add(snap.runway.id);
+
+      if (doTalkdown) {
+        const msgs = g.source.tickTalkdown(snap);
+        if (msgs.length) {
+          const t = JSON.stringify({ type: 'transcript', messages: msgs });
+          for (const ws of g.clients) if (ws.readyState === 1) ws.send(t);
+        }
+      }
+    }
+
+    if (doTalkdown) {
+      this.lastTalkdownAt = Date.now();
+      for (const src of this.sourceList) src.retainTalkdowns(watched.get(src.id) || new Set());
+    }
+  }
+
+  /** push connection/mission status to everybody (cheap, every few seconds) */
+  broadcastStatus() {
+    if (this.clients.size === 0) return;
+    const payload = JSON.stringify({ type: 'sources', sources: this.sourceList.map((s) => s.status) });
+    for (const ws of this.clients.keys()) if (ws.readyState === 1) ws.send(payload);
+  }
+
+  start(intervalMs = 200) {
+    this.timer = setInterval(() => this.tick(), intervalMs);
+    this.statusTimer = setInterval(() => this.broadcastStatus(), 5000);
+  }
+
+  stop() {
+    clearInterval(this.timer);
+    clearInterval(this.statusTimer);
+  }
+}
+
+function send(ws, obj) {
+  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
 module.exports = { WsHub };

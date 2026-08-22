@@ -1,10 +1,15 @@
 'use strict';
 
 /**
- * Minimal static file server + JSON API.
+ * Static file server + JSON API.
  *
- *   GET /api/config -> runway definitions and server info
- *   GET /api/state  -> current track snapshot (REST fallback)
+ *   GET /api/config                  sources and guidance tuning
+ *   GET /api/runways?source=         runway definitions of one server
+ *   GET /api/state?source=&runway=   current snapshot (REST fallback / probing)
+ *   GET /api/health                  per-source stream health (ops)
+ *
+ * All asset references in public/ are relative, so the console can be mounted
+ * at the site root or behind a reverse-proxy sub-path (e.g. /gca/).
  */
 
 const http = require('http');
@@ -23,30 +28,50 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-function createServer(cfg, store) {
+function createServer(cfg, sources) {
   return http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const pick = () => sources.get(url.searchParams.get('source')) || [...sources.values()][0];
 
-    if (url.pathname === '/api/config') {
-      json(res, {
-        runways: cfg.gca.runways,
-        defaultRunway: cfg.gca.defaultRunway,
-        tacviewConnected: store.tacviewConnected || false,
-      });
-      return;
+    switch (url.pathname) {
+      case '/api/config':
+        return json(res, {
+          sources: [...sources.values()].map((s) => ({
+            id: s.id,
+            name: s.name,
+            connected: s.client.connected,
+            mission: s.client.missionTitle,
+            defaultRunway: s.defaultRunwayId(),
+          })),
+          gca: cfg.gca,
+        });
+
+      case '/api/runways': {
+        const src = pick();
+        if (!src) return json(res, { runways: [] });
+        return json(res, { source: src.id, runways: src.runways, status: src.runwayProvider.status });
+      }
+
+      case '/api/state': {
+        const src = pick();
+        if (!src) return json(res, { tracks: [] });
+        return json(res, src.snapshot(url.searchParams.get('runway')));
+      }
+
+      case '/api/health': {
+        const list = [...sources.values()].map((s) => s.status);
+        const ok = list.some((s) => s.connected);
+        return json(res, { ok, sources: list }, ok ? 200 : 503);
+      }
+
+      default:
+        return serveStatic(url.pathname, res);
     }
-
-    if (url.pathname === '/api/state') {
-      json(res, store.snapshot(cfg.gca.defaultRunway));
-      return;
-    }
-
-    serveStatic(url.pathname, res);
   });
 }
 
 function serveStatic(pathname, res) {
-  let rel = pathname === '/' ? '/index.html' : pathname;
+  const rel = pathname === '/' ? '/index.html' : decodeURIComponent(pathname);
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR)) {
     res.writeHead(403).end('Forbidden');
@@ -57,13 +82,16 @@ function serveStatic(pathname, res) {
       res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not Found');
       return;
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+      'Cache-Control': 'no-cache',
+    });
     res.end(data);
   });
 }
 
-function json(res, obj) {
-  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+function json(res, obj, status = 200) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(obj));
 }
 

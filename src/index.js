@@ -1,47 +1,37 @@
 'use strict';
 
 const config = require('./config');
-const { TacviewClient } = require('./acmi/TacviewClient');
-const { TrackStore } = require('./acmi/TrackStore');
-const { Talkdown } = require('./acmi/Talkdown');
+const { DcsSource } = require('./sources/DcsSource');
 const { createServer } = require('./web/httpServer');
 const { WsHub } = require('./net/WsHub');
 
 const cfg = config.load();
-const store = new TrackStore(cfg);
 
-const tacview = new TacviewClient(cfg);
-tacview.on('update', (upd) => store.applyUpdate(upd));
-tacview.on('remove', (id) => store.remove(id));
-tacview.on('global', (k, v) => {
-  if (k === 'ReferenceTime') console.log(`[tacview] mission time reference: ${v}`);
-});
-tacview.start();
+const sources = new Map();
+for (const srcCfg of cfg.sources) {
+  const src = new DcsSource(cfg, srcCfg);
+  sources.set(src.id, src);
+  src.start();
+  console.log(`[main] source ${src.id} (${src.name}) -> ${srcCfg.tacview.host}:${srcCfg.tacview.port}`);
+}
 
-// Expose connection state for /api/config
-setInterval(() => {
-  store.tacviewConnected = Boolean(tacview.socket && !tacview.socket.destroyed);
-}, 1000);
-
-const server = createServer(cfg, store);
+const server = createServer(cfg, sources);
 server.listen(cfg.server.port, cfg.server.bind, () => {
   console.log(`[web] DCS Web GCA listening on http://${cfg.server.bind}:${cfg.server.port}`);
 });
 
-const hub = new WsHub(server, store, cfg);
-hub.startBroadcasting(200);
+const hub = new WsHub(server, sources, cfg);
+hub.start(cfg.server.broadcastIntervalMs || 200);
 
-// Real-time PAR talk-down phrase generation (1 Hz)
-const talkdown = new Talkdown(cfg);
-setInterval(() => {
-  const snap = store.snapshot(hub.selectedRunway);
-  const msgs = talkdown.update(snap.tracks, snap.runway);
-  hub.pushTranscript(msgs);
-}, 1000);
-
-process.on('SIGINT', () => {
-  console.log('\n[main] shutting down');
-  tacview.stop();
+let shuttingDown = false;
+function shutdown(sig) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[main] ${sig}, shutting down`);
+  hub.stop();
+  for (const src of sources.values()) src.stop();
   server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 2000);
-});
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

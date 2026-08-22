@@ -11,11 +11,20 @@
   <header>
     <h1><img src="icon.svg" width="22" height="22" alt="" style="vertical-align: -4px;" /> DCS Web GCA <span class="subtitle">Air Traffic Console</span></h1>
     <div class="controls">
+      <label for="sourceSelect">SRV:</label>
+      <select id="sourceSelect"></select>
       <label for="runwaySelect">RWY:</label>
       <select id="runwaySelect"></select>
+      <button id="refreshRunways" type="button" title="ミッション/マップを変えた直後に滑走路データを取り直す">&#8635;</button>
       <span id="connStatus" class="status disconnected">DISCONNECTED</span>
     </div>
   </header>
+
+  <div id="infoBar" class="info-bar">
+    <span id="missionInfo">-</span>
+    <span id="runwayInfo"></span>
+    <span id="trackCount"></span>
+  </div>
 
   <nav class="tabs">
     <button class="tab active" data-mode="gca">GCA (PAR)</button>
@@ -52,8 +61,9 @@
               <th>AZ DEV</th>
               <th>GS DEV</th>
               <th>ALT (ft)</th>
+              <th>GP ALT</th>
               <th>VS (fpm)</th>
-              <th>IAS (kt)</th>
+              <th>GS (kt)</th>
               <th>Guidance</th>
             </tr>
           </thead>
@@ -79,7 +89,7 @@
               <option value="80">80 nm</option>
             </select>
           </label>
-          <span class="hint">Click a blip to designate TARGET.</span>
+          <span class="hint">Click a blip to designate TARGET. Scroll to zoom.</span>
         </div>
         <canvas id="ppiScope" width="820" height="820"></canvas>
       </section>
@@ -109,8 +119,9 @@
               <th>RNG (nm)</th>
               <th>BRG</th>
               <th>ALT (ft)</th>
+              <th>AGL (ft)</th>
               <th>VS (fpm)</th>
-              <th>IAS (kt)</th>
+              <th>GS (kt)</th>
             </tr>
           </thead>
           <tbody></tbody>

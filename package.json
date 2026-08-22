@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/index.js",
     "mock": "node tools/mock-tacview.js",
-    "smoke": "node tools/smoke-test.js"
+    "smoke": "node tools/smoke-test.js",
+    "test:parser": "node tools/parser-test.js",
+    "test": "node tools/parser-test.js && node tools/smoke-test.js"
   },
   "engines": {
     "node": ">=18"

@@ -1,25 +1,54 @@
 {
   "server": {
     "port": 8080,
-    "bind": "127.0.0.1"
+    "bind": "0.0.0.0",
+    "broadcastIntervalMs": 200
   },
-  "tacview": {
-    "host": "127.0.0.1",
-    "port": 34250,
-    "password": "",
-    "reconnectDelayMs": 5000
+
+  "dcssb": {
+    "_comment": "DCSServerBot RestAPI. Runway geometry is pulled from DCS itself through it; set enabled=false to rely purely on the static runways below.",
+    "enabled": false,
+    "baseUrl": "http://127.0.0.1:9876",
+    "prefix": "/stats",
+    "apiKey": "",
+    "timeoutMs": 45000,
+    "requestSpacingMs": 1500,
+    "refreshOnMissionChange": true
   },
+
   "gca": {
     "staleAfterSec": 15,
-    "runways": [
-      {
-        "id": "Nellis RWY 21L",
-        "threshold": { "lat": 36.2377, "lon": -115.0345, "altFt": 1870 },
-        "headingDeg": 210,
-        "glidepathDeg": 3.0,
-        "lengthNm": 1.2
-      }
-    ],
-    "defaultRunway": "Nellis RWY 21L"
-  }
+    "glidepathDeg": 3.0,
+    "azToleranceDeg": 0.8,
+    "gsToleranceDeg": 0.4,
+    "talkdownIntervalSec": 15,
+    "talkdownMaxRangeNm": 12
+  },
+
+  "sources": [
+    {
+      "id": "server1",
+      "name": "DCS Server 1",
+      "tacview": {
+        "host": "127.0.0.1",
+        "port": 42674,
+        "password": "",
+        "reconnectDelayMs": 5000,
+        "clientName": "DCSWebGCA"
+      },
+      "_dcssbServerName": "name of this server in DCSServerBot's servers.yaml",
+      "dcssbServerName": null,
+      "_runways": "optional hand-written runways; they are merged in front of whatever is discovered from DCS",
+      "runways": [
+        {
+          "id": "Nellis 21L",
+          "threshold": { "lat": 36.2377, "lon": -115.0345, "altFt": 1870 },
+          "headingDeg": 210,
+          "glidepathDeg": 3.0,
+          "lengthNm": 1.2
+        }
+      ],
+      "defaultRunway": "Nellis 21L"
+    }
+  ]
 }

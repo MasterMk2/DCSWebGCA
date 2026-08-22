@@ -1,4 +1,12 @@
+<div align="center">
+
+<img src="public/icon.svg" width="120" alt="DCS Web GCA logo" />
+
 # DCS Web GCA
+
+**Web-based ATC console (GCA / GCI / TWR) for DCS World dedicated servers**
+
+</div>
 
 DCS World Dedicated Server 向けのブラウザベース管制コンソールです。
 導入済みの **Tacview** のリアルタイム ACMI テレメトリストリームを TCP で受信し、WebSocket 経由でブラウザ上の管制画面に配信します。

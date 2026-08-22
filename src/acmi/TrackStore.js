@@ -22,6 +22,14 @@ class TrackStore {
     this.cfg = cfg;
     this.label = label;
     this.tracks = new Map();
+    // config.load() fills these in, but the store is also constructed directly
+    // (tests, embedders), so never depend on them being present.
+    const gca = (cfg && cfg.gca) || {};
+    this.tuning = {
+      staleAfterSec: gca.staleAfterSec ?? 15,
+      azToleranceDeg: gca.azToleranceDeg ?? 0.8,
+      gsToleranceDeg: gca.gsToleranceDeg ?? 0.4,
+    };
   }
 
   clear() {
@@ -71,13 +79,13 @@ class TrackStore {
   }
 
   prune() {
-    const cutoff = Date.now() - this.cfg.gca.staleAfterSec * 1000;
+    const cutoff = Date.now() - this.tuning.staleAfterSec * 1000;
     for (const [id, t] of this.tracks) {
       if ((t.lastUpdate || 0) < cutoff) this.tracks.delete(id);
     }
   }
 
-  isAircraft(t) {
+  isAirborne(t) {
     return (t.category === 'FixedWing' || t.category === 'Rotorcraft') && planar(t) !== null;
   }
 
@@ -124,8 +132,8 @@ class TrackStore {
         ? Math.round((Math.tan((rwy.glidepathDeg * Math.PI) / 180) * along) / M_PER_FT + rwy.threshold.altFt)
         : null;
 
-    const az = this.cfg.gca.azToleranceDeg;
-    const gs = this.cfg.gca.gsToleranceDeg;
+    const az = this.tuning.azToleranceDeg;
+    const gs = this.tuning.gsToleranceDeg;
 
     return {
       rangeNm: round(rangeNm, 2),
@@ -149,7 +157,7 @@ class TrackStore {
 
     for (const t of this.tracks.values()) {
       total++;
-      if (!this.isAircraft(t)) continue;
+      if (!this.isAirborne(t)) continue;
 
       const altFt = t.altM !== undefined ? Math.round(t.altM / M_PER_FT) : null;
       const rec = {
@@ -167,7 +175,7 @@ class TrackStore {
         v: t.v,
         altFt,
         hdg: t.hdg !== undefined ? Math.round(t.hdg) : t.trkDeg !== undefined ? Math.round(t.trkDeg) : null,
-        trkDeg: t.trkDeg !== undefined ? Math.round(t.trkDeg) : null,
+        gc: t.trkDeg !== undefined ? Math.round(t.trkDeg) : null, // ground course
         gsKt: t.gsMs !== undefined ? Math.round(t.gsMs * KT_PER_MS) : null,
         iasKt: numProp(t.IAS, KT_PER_MS),
         tasKt: numProp(t.TAS, KT_PER_MS),

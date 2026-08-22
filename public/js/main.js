@@ -78,7 +78,7 @@ function speedMs(t) {
 }
 
 function courseDeg(t) {
-  return t.trkDeg !== null && t.trkDeg !== undefined ? t.trkDeg : t.hdg || 0;
+  return t.gc !== null && t.gc !== undefined ? t.gc : t.hdg || 0;
 }
 
 function escapeHtml(s) {
@@ -267,6 +267,7 @@ function setMode(mode) {
   state.mode = mode;
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
   document.querySelectorAll('.mode').forEach((s) => (s.hidden = s.id !== 'mode-' + mode));
+  fitCanvases();
   render();
 }
 
@@ -1031,6 +1032,86 @@ document.getElementById('refreshRunways').addEventListener('click', () => {
   send({ type: 'refreshRunways' });
 });
 
+/* ---------- touch: pinch zoom on scopes ---------- */
+
+function attachPinchZoom(canvasId, getRange, setRange) {
+  const el = document.getElementById(canvasId);
+  if (!el) return;
+  let startDist = 0;
+  let startRange = 0;
+
+  el.addEventListener('touchstart', (ev) => {
+    if (ev.touches.length === 2) {
+      startDist = Math.hypot(
+        ev.touches[0].clientX - ev.touches[1].clientX,
+        ev.touches[0].clientY - ev.touches[1].clientY
+      );
+      startRange = getRange();
+    }
+  }, { passive: true });
+
+  el.addEventListener('touchmove', (ev) => {
+    if (ev.touches.length === 2 && startDist > 0) {
+      ev.preventDefault();
+      const dist = Math.hypot(
+        ev.touches[0].clientX - ev.touches[1].clientX,
+        ev.touches[0].clientY - ev.touches[1].clientY
+      );
+      if (dist > 10) setRange(startRange * (startDist / dist)); // pinch in = zoom in
+    }
+  }, { passive: false });
+
+  el.addEventListener('touchend', () => {
+    startDist = 0;
+  });
+}
+
+attachPinchZoom(
+  'ppiScope',
+  () => state.gciRangeNm,
+  (v) => {
+    state.gciRangeNm = Math.min(120, Math.max(2, Math.round(v * 10) / 10));
+    render();
+  }
+);
+
+attachPinchZoom(
+  'twrScope',
+  () => state.twrRangeNm,
+  (v) => {
+    state.twrRangeNm = Math.min(15, Math.max(1, Math.round(v * 10) / 10));
+    render();
+  }
+);
+
+/* ---------- responsive canvas sizing (smartphones / tablets) ---------- */
+
+const CANVAS_ASPECTS = [
+  ['azimuthScope', 900 / 360],
+  ['elevationScope', 900 / 300],
+  ['ppiScope', 1],
+  ['twrScope', 900 / 640],
+];
+
+function fitCanvases() {
+  for (const [id, aspect] of CANVAS_ASPECTS) {
+    const c = document.getElementById(id);
+    if (!c || !c.clientWidth) continue;
+    const w = Math.max(280, Math.min(1000, Math.round(c.clientWidth)));
+    const h = Math.round(w / aspect);
+    if (Math.abs(c.width - w) > 4 || Math.abs(c.height - h) > 4) {
+      c.width = w;
+      c.height = h;
+    }
+  }
+}
+
+window.addEventListener('resize', () => {
+  fitCanvases();
+  render();
+});
+
 /* ---------- boot ---------- */
 
+fitCanvases();
 connectWs();

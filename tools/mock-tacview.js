@@ -1,132 +1,140 @@
 'use strict';
 
 /**
- * Mock Tacview real-time server for local development and CI.
+ * Mock Tacview real-time server for local development.
+ * Emits a synthetic ACMI 2.2 stream with an aircraft flying a precision
+ * approach to the first runway defined in the config.
  *
- * It speaks the same protocol DCS does — the XtraLib handshake followed by an
- * ACMI 2.2 text stream in the real on-the-wire shape (`id,T=lon|lat|alt|...`,
- * coordinates relative to the ReferenceLatitude/Longitude header) — so running
- * against it actually exercises the parser rather than a private dialect.
+ * Faithful to the real protocol:
+ * - XtraLib handshake reply; streaming starts only AFTER the handshake
+ * - global properties on object id 0, comma separated
+ * - object updates: <id>,T=pipe|separated|transform,Type=...,Name=...
+ * - ReferenceLongitude/Latitude globals with RELATIVE lon/lat in transforms
+ * - 9-field transform form including U/V meters (u = DCS z = east,
+ *   v = DCS x = north)
+ * - DCS-style types ("Air+FixedWing") and NO IAS/TAS properties
  *
- * Usage:  node tools/mock-tacview.js        (listens on 127.0.0.1:34251)
+ * Usage:  node tools/mock-tacview.js   (listens on 127.0.0.1:34251)
  * Then:   TACVIEW_PORT=34251 npm start
  */
 
 const net = require('net');
+
 const { load } = require('../src/config');
 
 const cfg = load();
-const rwy =
-  (cfg.sources[0].runways && cfg.sources[0].runways[0]) || {
-    id: 'Nellis 21L',
-    threshold: { lat: 36.2377, lon: -115.0345, altFt: 1870 },
-    headingDeg: 210,
-    glidepathDeg: 3.0,
-  };
+const srcCfg = (cfg.sources && cfg.sources[0]) || {};
+const rwy = (srcCfg.runways && srcCfg.runways[0]) || {
+  id: 'MOCK RWY',
+  threshold: { lat: 36.0, lon: 140.0, altFt: 100 },
+  headingDeg: 210,
+  glidepathDeg: 3.0,
+  lengthNm: 1.2,
+};
+const PORT = process.env.MOCK_PORT || 34251;
 
-const PORT = parseInt(process.env.MOCK_PORT || '34251', 10);
 const M_PER_FT = 0.3048;
-const M_PER_NM = 1852;
 const EARTH_M_PER_DEG = 111320;
+const M_PER_NM = 1852;
 
-const REF_LAT = Math.floor(rwy.threshold.lat);
-const REF_LON = Math.floor(rwy.threshold.lon);
+const REF_LAT = rwy.threshold.lat;
+const REF_LON = rwy.threshold.lon;
+const COS_REF = Math.cos((REF_LAT * Math.PI) / 180);
 
-/**
- * Position an aircraft `alongNm` before the threshold on final, `crossNm` to
- * the right of the centreline. Traffic on approach is on the *far* side of the
- * threshold from the runway, i.e. opposite the landing heading.
- */
-function positionAt(alongNm, crossNm, gsDevDeg, extraAltM = 0) {
+function positionAt(alongNm, crossNm, gsDevDeg) {
   const alongM = alongNm * M_PER_NM;
   const crossM = crossNm * M_PER_NM;
   const hdgRad = (rwy.headingDeg * Math.PI) / 180;
-  const east = -alongM * Math.sin(hdgRad) + crossM * Math.cos(hdgRad);
-  const north = -alongM * Math.cos(hdgRad) - crossM * Math.sin(hdgRad);
+  // aircraft starts BEHIND the threshold (opposite of landing direction)
+  // and flies toward it on the landing heading
+  const x = -alongM * Math.sin(hdgRad) + crossM * Math.cos(hdgRad); // east
+  const y = -alongM * Math.cos(hdgRad) - crossM * Math.sin(hdgRad); // north
 
   const altM =
     rwy.threshold.altFt * M_PER_FT +
-    Math.tan(((rwy.glidepathDeg + gsDevDeg) * Math.PI) / 180) * alongM +
-    extraAltM;
+    Math.tan(((rwy.glidepathDeg + gsDevDeg) * Math.PI) / 180) * alongM;
 
-  const lat = rwy.threshold.lat + north / EARTH_M_PER_DEG;
-  const lon = rwy.threshold.lon + east / (EARTH_M_PER_DEG * Math.cos((rwy.threshold.lat * Math.PI) / 180));
-  return { lat, lon, altM };
+  // coordinates RELATIVE to the reference point (as real Tacview exports)
+  const relLat = y / EARTH_M_PER_DEG;
+  const relLon = x / (EARTH_M_PER_DEG * COS_REF);
+
+  return { relLat, relLon, altM, u: x, v: y }; // u = east, v = north
 }
 
-/** 9-field transform with the native u/v left empty, as a lat/lon-only exporter would send it */
-function transform(p, hdg) {
-  return [
-    (p.lon - REF_LON).toFixed(7),
-    (p.lat - REF_LAT).toFixed(7),
-    p.altM.toFixed(2),
-    '',
-    '',
-    hdg.toFixed(1),
-    '',
-    '',
-    hdg.toFixed(1),
-  ].join('|');
+function transform(p, roll, pitch, hdg) {
+  // transform sub-fields are PIPE separated on the wire
+  return `T=${p.relLon.toFixed(7)}|${p.relLat.toFixed(7)}|${p.altM.toFixed(1)}|${roll}|${pitch}|${hdg.toFixed(1)}|${p.u.toFixed(1)}|${p.v.toFixed(1)}|${hdg.toFixed(1)}`;
 }
 
 const server = net.createServer((socket) => {
-  let handshakeDone = false;
+  console.log('[mock] client connected');
+
+  let handshaken = false;
   let timer = null;
+  let t = 0;
 
+  // The real host only starts streaming after the client handshake; sending
+  // the global header before it would make those lines part of the handshake
+  // exchange and get them dropped by the client.
   socket.on('data', (chunk) => {
-    if (handshakeDone) return;
-    if (chunk.indexOf(0) < 0) return;
-    handshakeDone = true;
-    console.log('[mock] client connected');
+    if (handshaken) return;
+    handshaken = true;
+    console.log('[mock] handshake received, replying as host');
+    socket.write('XtraLib.Stream.0\nTacview.RealTimeTelemetry.0\nDCSWebGCA-mock\n\0');
+    startStream();
+  });
 
-    socket.write('XtraLib.Stream.0\nTacview.RealTimeTelemetry.0\nMockServer\n\0');
-    socket.write('FileType=text/acmi/tacview\nFileVersion=2.2\n');
+  function startStream() {
+    socket.write('FileType=text/acmi/tacview\n');
+    socket.write('FileVersion=2.2\n');
+    // global properties belong to object id 0, comma separated
+    socket.write(`0,ReferenceLongitude=${REF_LON}\n`);
+    socket.write(`0,ReferenceLatitude=${REF_LAT}\n`);
     socket.write('0,ReferenceTime=2026-01-01T00:00:00Z\n');
-    socket.write(`0,ReferenceLatitude=${REF_LAT}\n0,ReferenceLongitude=${REF_LON}\n`);
-    socket.write('0,Title=DCS Web GCA mock\n0,DataSource=mock-tacview\n');
+    socket.write('0,DataSource=DCS Web GCA mock\n');
 
-    let t = 0;
-    timer = setInterval(() => {
-      t += 0.1;
+    timer = setInterval(streamFrame, 100);
+  }
 
-      // #1 aircraft flying a wandering precision approach, looping 10 nm -> 0.5 nm
-      const along = 10 - (((t / 60) * 2.5) % 9.5);
-      const cross = 0.25 * Math.sin(t / 9);
-      const gsDev = 0.35 * Math.sin(t / 14);
-      const p1 = positionAt(along, cross, gsDev);
-      const hdg1 = rwy.headingDeg + (cross > 0 ? -2 : 2); // correcting back to centreline
+  function streamFrame() {
+    t += 0.1;
 
-      // #2 aircraft holding off to the side
-      const p2 = positionAt(6 + 2 * Math.sin(t / 30), -2.5, 0, 600);
+    // Approach aircraft: 10 nm out, ~150 kt groundspeed, sinusoidal errors
+    const alongNm = 10 - (t / 60) * 2.5; // 2.5 nm per minute
+    const looped = ((alongNm % 10) + 10) % 10;
+    const d = looped < 0.5 ? looped + 10 : looped; // wrap back to 10 nm
+    const crossNm = 0.25 * Math.sin(t / 90);
+    const gsDev = 0.35 * Math.sin(t / 140);
 
-      socket.write(`#${(1000 + t).toFixed(2)}\n`);
-      socket.write(
-        `1001,T=${transform(p1, hdg1)},Type=Air+FixedWing,Name=F/A-18C,Pilot=Viper-1,Group=Viper,` +
-          `Coalition=Enemies,Color=Blue,IAS=${(140 + 8 * Math.sin(t / 5)) * 0.514444}\n`
-      );
-      socket.write(
-        `1002,T=${transform(p2, rwy.headingDeg + 90)},Type=Air+FixedWing,Name=F-16C,Pilot=Falcon-2,` +
-          `Group=Falcon,Coalition=Enemies,Color=Blue,IAS=${250 * 0.514444}\n`
-      );
-      // ground clutter: must be filtered out of the console
-      socket.write(
-        `2001,T=${transform(positionAt(0, 0, 0), 0)},Type=Ground+Static+Aerodrome,Name=Tower\n`
-      );
-    }, 100);
-  });
+    const p = positionAt(d, crossNm, gsDev);
+    const hdg = rwy.headingDeg + (crossNm > 0 ? -2 : 2);
 
-  const stop = () => {
-    if (timer) clearInterval(timer);
-    timer = null;
-  };
+    socket.write(`#${(1000 + t).toFixed(2)}\n`);
+    // object updates: <id>,T=pipe|separated|transform,Type=...,Name=...,Pilot=...
+    socket.write(
+      `1,${transform(p, 0, 4, hdg)},Type=Air+FixedWing,Name=F/A-18C,Pilot=Viper-1\n`
+    );
+
+    // A second aircraft holding off to the side
+    const p2 = positionAt(6 + 2 * Math.sin(t / 30), -2.5, 0);
+    socket.write(
+      `2,${transform(p2, 0, 10, rwy.headingDeg + 90)},Type=Air+FixedWing,Name=F-16C,Pilot=Falcon-2\n`
+    );
+
+    // Ground object at the field
+    socket.write(
+      `3,T=0|0|${(rwy.threshold.altFt * M_PER_FT).toFixed(1)}|0|0|${rwy.headingDeg.toFixed(1)}|0|0|${rwy.headingDeg.toFixed(1)},Name=Tower,Type=Ground+Static\n`
+    );
+  }
+
   socket.on('close', () => {
-    stop();
     console.log('[mock] client disconnected');
+    if (timer) clearInterval(timer);
   });
-  socket.on('error', stop);
+  socket.on('error', () => {});
 });
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[mock] Tacview simulator on tcp://127.0.0.1:${PORT} (runway: ${rwy.id})`);
-  console.log(`[mock] start the GCA server with: TACVIEW_PORT=${PORT} npm start`);
+  console.log('[mock] start the GCA server with: TACVIEW_PORT=' + PORT + ' npm start');
 });

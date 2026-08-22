@@ -20,12 +20,47 @@
 const M_PER_NM = 1852;
 const FT_PER_M = 3.28084;
 
+/**
+ * Phrase templates. Override any of them through config:
+ *
+ *   "gca": {
+ *     "phrases": {
+ *       "onCourse": "{callsign}、コース上です",
+ *       ...
+ *     }
+ *   }
+ *
+ * Placeholders: {callsign} {range} {side} {other} {heading} {dir}
+ *               {intensity} {altitude} {verb}
+ */
+const DEFAULT_PHRASES = {
+  intro: '{callsign}, {range} miles from touchdown',
+  onCourse: 'on course',
+  slightlyOffCourse: 'slightly {side} of course, correct {other}',
+  offCourse: '{intensity}{side} of course, turn heading {heading}',
+  reportAltitude: 'report altitude',
+  onGlidepath: 'on glidepath',
+  offGlidepathHigh: '{intensity}high, descend and maintain {altitude} feet',
+  offGlidepathLow: '{intensity}low, climb and maintain {altitude} feet',
+  overThreshold: 'over threshold, check runway in sight',
+  oneMile: 'one mile, runway should be in sight',
+};
+
 class Talkdown {
   constructor(cfg) {
     this.cfg = cfg;
     this.intervalMs = ((cfg.gca && cfg.gca.talkdownIntervalSec) || 15) * 1000;
     this.maxRangeNm = (cfg.gca && cfg.gca.talkdownMaxRangeNm) || 12;
+    this.phrases = Object.assign({}, DEFAULT_PHRASES, (cfg.gca && cfg.gca.phrases) || {});
     this.state = new Map(); // runwayId -> Map(trackId -> { lastMsgAt, lastKey })
+  }
+
+  /** Render a template with placeholder substitution. */
+  t(key, vars) {
+    return String(this.phrases[key] || DEFAULT_PHRASES[key] || key).replace(
+      /\{(\w+)\}/g,
+      (_, name) => (vars[name] !== undefined ? vars[name] : `{${name}}`)
+    );
   }
 
   /**
@@ -72,7 +107,7 @@ class Talkdown {
       const changed = key !== st.lastKey;
 
       if (!st.lastKey || due || changed) {
-        msgs.push({ time: now, id: t.id, text: buildPhrase(t, t.approach, rwy) });
+        msgs.push({ time: now, id: t.id, text: this.buildPhrase(t, t.approach, rwy) });
         st.lastMsgAt = now;
         st.lastKey = key;
         rwyState.set(t.id, st);
@@ -99,74 +134,62 @@ function normDeg(d) {
   return ((d % 360) + 360) % 360;
 }
 
-function buildPhrase(t, ap, rwy) {
-  const cs = t.pilot || t.name || t.id;
-  const parts = [`${cs}, ${ap.rangeNm.toFixed(1)} miles from touchdown`];
-
-  lateralPhrase(parts, ap, rwy);
-  glidepathPhrase(parts, ap, rwy);
-
-  // short-final calls
-  if (ap.rangeNm < 0.5) parts.push('over threshold, check runway in sight');
-  else if (ap.rangeNm < 1) parts.push('one mile, runway should be in sight');
-
-  return parts.join(', ') + '.';
+/** Replace {placeholder} tokens from a vars object. */
+function renderTemplate(tpl, vars) {
+  return String(tpl).replace(/\{(\w+)\}/g, (_, name) =>
+    vars[name] !== undefined ? String(vars[name]) : `{${name}}`
+  );
 }
 
-/**
- * Lateral guidance with graduated PAR phraseology:
- *   on course / slightly right of course / right of course /
- *   well right of course
- */
-function lateralPhrase(parts, ap, rwy) {
+Talkdown.prototype.buildPhrase = function (t, ap, rwy) {
+  const P = this.phrases;
+  const parts = [
+    renderTemplate(P.intro, { callsign: t.pilot || t.name || t.id, range: ap.rangeNm.toFixed(1) }),
+  ];
+
+  // ---- lateral guidance (graduated PAR phraseology) ----
   const a = Math.abs(ap.azDevDeg);
   const side = ap.azDevDeg > 0 ? 'right' : 'left';
   const other = side === 'right' ? 'left' : 'right';
 
   if (a < 0.3) {
-    parts.push('on course');
+    parts.push(renderTemplate(P.onCourse, {}));
   } else if (a < 1.5) {
-    // small correction, no heading change ordered yet
-    parts.push(`slightly ${side} of course, correct ${other}`);
+    parts.push(renderTemplate(P.slightlyOffCourse, { side, other }));
   } else {
     const intensity = a >= 3 ? 'well ' : '';
     const corr = Math.max(5, Math.min(30, a * 3));
-    const newHdg = Math.round(normDeg(rwy.headingDeg + (ap.azDevDeg > 0 ? -corr : corr)) / 5) * 5;
-    parts.push(`${intensity}${side} of course, turn heading ${String(normDeg(newHdg)).padStart(3, '0')}`);
+    const heading = String(
+      Math.round(normDeg(rwy.headingDeg + (ap.azDevDeg > 0 ? -corr : corr)) / 5) * 5
+    ).padStart(3, '0');
+    parts.push(renderTemplate(P.offCourse, { intensity, side, heading }));
   }
-}
 
-/**
- * Vertical guidance with graduated PAR phraseology:
- *   on glidepath / slightly high (low) / high (low) / well high (low),
- * each with the expected altitude readout.
- */
-function glidepathPhrase(parts, ap, rwy) {
+  // ---- vertical guidance (graduated PAR phraseology) ----
   if (ap.gsDevDeg === null) {
-    parts.push('report altitude');
-    return;
-  }
-
-  const g = Math.abs(ap.gsDevDeg);
-  if (g < 0.2) {
-    parts.push('on glidepath');
-    return;
-  }
-
-  const dir = ap.gsDevDeg > 0 ? 'high' : 'low';
-  const intensity = g >= 1.5 ? 'well ' : g >= 0.7 ? '' : 'slightly ';
-
-  const alongM = ap.alongNm * M_PER_NM;
-  const shouldFt =
-    Math.round(
-      (Math.tan((rwy.glidepathDeg * Math.PI) / 180) * alongM * FT_PER_M + rwy.threshold.altFt) / 100
-    ) * 100;
-
-  if (dir === 'high') {
-    parts.push(`${intensity}high, descend and maintain ${shouldFt} feet`);
+    parts.push(renderTemplate(P.reportAltitude, {}));
   } else {
-    parts.push(`${intensity}low, climb and maintain ${shouldFt} feet`);
+    const g = Math.abs(ap.gsDevDeg);
+    if (g < 0.2) {
+      parts.push(renderTemplate(P.onGlidepath, {}));
+    } else {
+      const dir = ap.gsDevDeg > 0 ? 'high' : 'low';
+      const intensity = g >= 1.5 ? 'well ' : g >= 0.7 ? '' : 'slightly ';
+      const alongM = ap.alongNm * M_PER_NM;
+      const altitude =
+        Math.round(
+          (Math.tan((rwy.glidepathDeg * Math.PI) / 180) * alongM * FT_PER_M + rwy.threshold.altFt) / 100
+        ) * 100;
+      const verb = dir === 'high' ? 'descend' : 'climb';
+      parts.push(renderTemplate(dir === 'high' ? P.offGlidepathHigh : P.offGlidepathLow, { intensity, altitude, verb }));
+    }
   }
-}
+
+  // ---- short-final calls ----
+  if (ap.rangeNm < 0.5) parts.push(renderTemplate(P.overThreshold, {}));
+  else if (ap.rangeNm < 1) parts.push(renderTemplate(P.oneMile, {}));
+
+  return parts.join(', ') + '.';
+};
 
 module.exports = { Talkdown };

@@ -29,8 +29,28 @@ const MIME = {
 };
 
 function createServer(cfg, sources) {
+  const authToken = (cfg.auth && cfg.auth.token) || '';
+
+  // Token check for the API and the WebSocket endpoint. Static assets stay
+  // open so the page itself loads; every data path is protected. The token
+  // comes either as ?token=... (WebSocket / simple links) or as an
+  // Authorization: Bearer header.
+  function authorized(url, req) {
+    if (!authToken) return true;
+    if (!url.pathname.startsWith('/api/') && url.pathname !== '/ws') return true;
+    if (url.searchParams.get('token') === authToken) return true;
+    const header = req.headers.authorization || '';
+    return header === `Bearer ${authToken}`;
+  }
+
   return http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+    if (!authorized(url, req)) {
+      res.writeHead(401, { 'WWW-Authenticate': 'Bearer' });
+      return res.end('Unauthorized');
+    }
+
     const pick = () => sources.get(url.searchParams.get('source')) || [...sources.values()][0];
 
     switch (url.pathname) {

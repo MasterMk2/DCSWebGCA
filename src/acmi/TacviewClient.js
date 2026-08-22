@@ -20,6 +20,7 @@ const { EventEmitter } = require('events');
 const { AcmiParser } = require('./AcmiParser');
 
 const IDLE_TIMEOUT_MS = 60000;
+const HANDSHAKE_TIMEOUT_MS = 10000;
 
 class TacviewClient extends EventEmitter {
   constructor(tacviewCfg, label = 'tacview') {
@@ -89,12 +90,23 @@ class TacviewClient extends EventEmitter {
     socket.setEncoding('utf8');
     socket.setNoDelay(true);
 
+    // A host that accepts the TCP connection but never answers the handshake
+    // (wrong port, half-open socket) would otherwise sit there forever.
+    const handshakeTimer = setTimeout(() => {
+      if (!this.handshakeDone) {
+        console.error(`[${this.label}] no handshake within ${HANDSHAKE_TIMEOUT_MS / 1000}s, reconnecting`);
+        socket.destroy();
+      }
+    }, HANDSHAKE_TIMEOUT_MS);
+    socket.on('close', () => clearTimeout(handshakeTimer));
+
     socket.on('data', (chunk) => {
       this.lastDataAt = Date.now();
       if (!this.handshakeDone) {
         this.buffer += chunk;
         const nul = this.buffer.indexOf('\0');
         if (nul < 0) return; // still reading the host handshake
+        clearTimeout(handshakeTimer);
         const hello = this.buffer.slice(0, nul).split('\n');
         this.handshakeDone = true;
         this.connected = true;

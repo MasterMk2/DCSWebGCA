@@ -19,6 +19,15 @@ const KT_TO_MS = 0.514444;
  * directory this page was served from. */
 const BASE = location.pathname.replace(/[^/]*$/, '');
 
+/* Optional access token: picked up from ?token=... once, then remembered.
+ * The server only enforces it when cfg.auth.token is set. */
+const TOKEN = new URLSearchParams(location.search).get('token') || localStorage.getItem('gcaToken') || '';
+if (new URLSearchParams(location.search).get('token')) {
+  localStorage.setItem('gcaToken', TOKEN);
+}
+const authQuery = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : '';
+const authHeaders = TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {};
+
 const state = {
   mode: 'gca',
   sources: [],
@@ -33,6 +42,7 @@ const state = {
   ownshipId: null,  // GCI ownship
   gciRangeNm: 20,
   twrRangeNm: 6,
+  gcaRangeNm: 12,
   tolerance: { azToleranceDeg: 0.8, gsToleranceDeg: 0.4 },
 };
 
@@ -95,7 +105,7 @@ function escapeHtml(s) {
 
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}${BASE}ws`);
+  ws = new WebSocket(`${proto}//${location.host}${BASE}ws${authQuery}`);
 
   ws.onopen = () => setConnStatus(true);
   ws.onclose = () => {
@@ -351,9 +361,8 @@ function drawTrackLabel(ctx, t, x, y, color) {
 
 /* ================= GCA mode ================= */
 
-const GCA_MAX_RANGE_NM = 12;
-const GCA_MAX_CROSS_NM = 3;
-const GCA_MAX_ALT_FT = 6000;
+const GCA_MIN_RANGE_NM = 2;
+const GCA_MAX_RANGE_NM = 30;
 
 function renderGca() {
   drawAzimuth();
@@ -503,24 +512,27 @@ function drawAzimuth() {
   const padL = 50, padR = 20, padT = 15, padB = 30;
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
-  const xOf = (nm) => padL + (nm / GCA_MAX_RANGE_NM) * plotW;
-  const yOf = (crossNm) => padT + ((GCA_MAX_CROSS_NM - crossNm) / (2 * GCA_MAX_CROSS_NM)) * plotH;
+  const R = state.gcaRangeNm;
+  const C = Math.max(0.5, R / 4); // cross-track half-width scales with range
 
-  grid(ctx, xOf, yOf, padL, padT, plotW, plotH, 'RNG nm', 'AZ');
+  const xOf = (nm) => padL + (nm / R) * plotW;
+  const yOf = (crossNm) => padT + ((C - crossNm) / (2 * C)) * plotH;
+
+  grid(ctx, xOf, yOf, padL, padT, plotW, plotH, 'RNG nm', 'AZ', R);
 
   ctx.strokeStyle = '#2a5a3a';
   ctx.setLineDash([6, 6]);
   ctx.beginPath();
   ctx.moveTo(xOf(0), yOf(0));
-  ctx.lineTo(xOf(GCA_MAX_RANGE_NM), yOf(0));
+  ctx.lineTo(xOf(R), yOf(0));
   ctx.stroke();
 
   ctx.strokeStyle = '#1e3a28';
   for (const dev of [1, -1]) {
-    const yEnd = yOf(Math.tan((dev * Math.PI) / 180) * GCA_MAX_RANGE_NM);
+    const yEnd = yOf(Math.tan((dev * Math.PI) / 180) * R);
     ctx.beginPath();
     ctx.moveTo(xOf(0), yOf(0));
-    ctx.lineTo(xOf(GCA_MAX_RANGE_NM), yEnd);
+    ctx.lineTo(xOf(R), yEnd);
     ctx.stroke();
   }
   ctx.setLineDash([]);
@@ -534,8 +546,8 @@ function drawAzimuth() {
 
   for (const t of state.tracks) {
     const ap = t.approach;
-    if (!ap || ap.alongNm < -0.5 || ap.alongNm > GCA_MAX_RANGE_NM) continue;
-    if (Math.abs(ap.crossNm) > GCA_MAX_CROSS_NM) continue;
+    if (!ap || ap.alongNm < -0.5 || ap.alongNm > R) continue;
+    if (Math.abs(ap.crossNm) > C) continue;
     const x = xOf(ap.alongNm), y = yOf(ap.crossNm);
     const color = t.id === state.selectedId ? '#ffc23d' : '#39ff8b';
     drawSymbol(ctx, t, x, y, color);
@@ -557,23 +569,30 @@ function drawElevation() {
   const thrAlt = rwy ? rwy.threshold.altFt : 0;
   const glide = rwy ? rwy.glidepathDeg : 3;
 
-  const xOf = (nm) => padL + (nm / GCA_MAX_RANGE_NM) * plotW;
-  const yOf = (altFt) => padT + ((GCA_MAX_ALT_FT - (altFt - thrAlt)) / GCA_MAX_ALT_FT) * plotH;
+  const R = state.gcaRangeNm;
+  // altitude axis follows the glidepath so the beam stays mid-screen
+  const ALT = Math.max(
+    1000,
+    Math.round((Math.tan((glide * Math.PI) / 180) * R * M_PER_NM * 3.28084) / 500) * 500
+  );
 
-  grid(ctx, xOf, yOf, padL, padT, plotW, plotH, 'RNG nm', 'AGL ft');
+  const xOf = (nm) => padL + (nm / R) * plotW;
+  const yOf = (altFt) => padT + ((ALT - (altFt - thrAlt)) / ALT) * plotH;
 
-  const altAtMax = Math.tan((glide * Math.PI) / 180) * GCA_MAX_RANGE_NM * M_PER_NM * 3.28084;
+  grid(ctx, xOf, yOf, padL, padT, plotW, plotH, 'RNG nm', 'AGL ft', R);
+
+  const altAtMax = Math.tan((glide * Math.PI) / 180) * R * M_PER_NM * 3.28084;
   ctx.strokeStyle = '#2a5a3a';
   ctx.setLineDash([6, 6]);
   ctx.beginPath();
   ctx.moveTo(xOf(0), yOf(thrAlt));
-  ctx.lineTo(xOf(GCA_MAX_RANGE_NM), yOf(thrAlt + Math.min(altAtMax, GCA_MAX_ALT_FT)));
+  ctx.lineTo(xOf(R), yOf(thrAlt + Math.min(altAtMax, ALT)));
   ctx.stroke();
   ctx.setLineDash([]);
 
   for (const t of state.tracks) {
     const ap = t.approach;
-    if (!ap || ap.altFt === null || ap.alongNm < -0.5 || ap.alongNm > GCA_MAX_RANGE_NM) continue;
+    if (!ap || ap.altFt === null || ap.alongNm < -0.5 || ap.alongNm > R) continue;
     const x = xOf(ap.alongNm), y = yOf(ap.altFt);
     const color = t.id === state.selectedId ? '#ffc23d' : '#39ff8b';
     drawSymbol(ctx, t, x, y, color);
@@ -581,12 +600,13 @@ function drawElevation() {
   }
 }
 
-function grid(ctx, xOf, yOf, padL, padT, plotW, plotH, xLabel, yLabel) {
+function grid(ctx, xOf, yOf, padL, padT, plotW, plotH, xLabel, yLabel, maxRange) {
   ctx.strokeStyle = '#14202b';
   ctx.fillStyle = '#5a6b7a';
   ctx.font = '11px Consolas, monospace';
 
-  for (let nm = 0; nm <= GCA_MAX_RANGE_NM; nm += 2) {
+  const step = Math.max(1, Math.round(maxRange / 6));
+  for (let nm = 0; nm <= maxRange + 0.01; nm += step) {
     const x = xOf(nm);
     ctx.beginPath();
     ctx.moveTo(x, padT);
@@ -1028,6 +1048,16 @@ attachWheelZoom(
   }
 );
 
+// GCA scopes share one range (2 - 30 nm); the altitude axis follows the glidepath
+function setGcaRange(v) {
+  state.gcaRangeNm = Math.min(GCA_MAX_RANGE_NM, Math.max(GCA_MIN_RANGE_NM, Math.round(v * 10) / 10));
+  render();
+}
+attachWheelZoom('azimuthScope', () => state.gcaRangeNm, setGcaRange);
+attachWheelZoom('elevationScope', () => state.gcaRangeNm, setGcaRange);
+attachPinchZoom('azimuthScope', () => state.gcaRangeNm, setGcaRange);
+attachPinchZoom('elevationScope', () => state.gcaRangeNm, setGcaRange);
+
 document.getElementById('refreshRunways').addEventListener('click', () => {
   send({ type: 'refreshRunways' });
 });
@@ -1094,10 +1124,12 @@ const CANVAS_ASPECTS = [
 ];
 
 function fitCanvases() {
+  // render at device resolution so scopes stay crisp on HD/Retina screens
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   for (const [id, aspect] of CANVAS_ASPECTS) {
     const c = document.getElementById(id);
     if (!c || !c.clientWidth) continue;
-    const w = Math.max(280, Math.min(1000, Math.round(c.clientWidth)));
+    const w = Math.max(280 * dpr, Math.min(1000 * dpr, Math.round(c.clientWidth * dpr)));
     const h = Math.round(w / aspect);
     if (Math.abs(c.width - w) > 4 || Math.abs(c.height - h) > 4) {
       c.width = w;

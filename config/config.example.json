@@ -16,13 +16,31 @@
     "refreshOnMissionChange": true
   },
 
+  "auth": {
+    "_comment": "Set token to require ?token=... (or an Authorization: Bearer header) on /api/* and /ws. Empty = no auth.",
+    "token": ""
+  },
+
   "gca": {
     "staleAfterSec": 15,
     "glidepathDeg": 3.0,
     "azToleranceDeg": 0.8,
     "gsToleranceDeg": 0.4,
     "talkdownIntervalSec": 15,
-    "talkdownMaxRangeNm": 12
+    "talkdownMaxRangeNm": 12,
+    "_phrases": "optional talk-down phrase overrides; placeholders: {callsign} {range} {side} {other} {heading} {dir} {intensity} {altitude} {verb}",
+    "phrases": {
+      "intro": "{callsign}, {range} miles from touchdown",
+      "onCourse": "on course",
+      "slightlyOffCourse": "slightly {side} of course, correct {other}",
+      "offCourse": "{intensity}{side} of course, turn heading {heading}",
+      "reportAltitude": "report altitude",
+      "onGlidepath": "on glidepath",
+      "offGlidepathHigh": "{intensity}high, descend and maintain {altitude} feet",
+      "offGlidepathLow": "{intensity}low, climb and maintain {altitude} feet",
+      "overThreshold": "over threshold, check runway in sight",
+      "oneMile": "one mile, runway should be in sight"
+    }
   },
 
   "sources": [

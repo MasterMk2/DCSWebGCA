@@ -23,7 +23,19 @@ class WsHub {
     this.clients = new Map(); // ws -> { sourceId, runwayId }
     this.lastTalkdownAt = 0;
 
-    this.wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+    const authToken = (cfg.auth && cfg.auth.token) || '';
+    this.wss = new WebSocketServer({
+      server: httpServer,
+      path: '/ws',
+      // token check on the upgrade request (?token=... or Bearer header)
+      verifyClient: authToken
+        ? (info) => {
+            const url = new URL(info.req.url, 'http://localhost');
+            if (url.searchParams.get('token') === authToken) return true;
+            return (info.req.headers.authorization || '') === `Bearer ${authToken}`;
+          }
+        : undefined,
+    });
     this.wss.on('connection', (ws) => this.onConnection(ws));
   }
 

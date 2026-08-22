@@ -1,0 +1,9 @@
+node_modules
+config/config.json
+*.log
+.git
+.github
+tools
+deploy
+README.md
+docker-compose.yml

@@ -1,0 +1,20 @@
+services:
+  gca:
+    image: ghcr.io/mastermk2/dcswebgca:latest
+    # Or build locally instead of pulling:
+    # build: .
+    container_name: dcs-web-gca
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # DCS server address as seen from the container.
+      # If DCS + Tacview run on the SAME host, keep host.docker.internal
+      # (enabled by extra_hosts below). Otherwise set the DCS server IP.
+      TACVIEW_HOST: host.docker.internal
+      TACVIEW_PORT: "34250"
+      # TACVIEW_PASSWORD: changeme
+    volumes:
+      - ./config:/app/config:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

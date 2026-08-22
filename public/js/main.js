@@ -20,6 +20,7 @@ const state = {
   targetId: null,     // GCI target
   ownshipId: null,    // GCI ownship
   gciRangeNm: 20,
+  twrRangeNm: 6,
   glideDeg: 3.0,
 };
 
@@ -55,8 +56,9 @@ function fmtBrg(d) {
 }
 
 function trackSpeedMs(t) {
-  const kt = t.iasKt;
-  return kt ? kt * KT_TO_MS : 0;
+  // ground speed derived server-side from position differencing
+  const kt = t.spdKt;
+  return kt ? kt / 1.94384 : 0;
 }
 
 function escapeHtml(s) {
@@ -92,7 +94,7 @@ function connectWs() {
     switch (msg.type) {
       case 'hello':
         // full runway configs are loaded from /api/config at boot;
-        // hello only confirms the server-side selected runway
+        // hello only confirms the server-side default runway
         state.runway = msg.runway;
         {
           const sel = document.getElementById('runwaySelect');
@@ -108,7 +110,8 @@ function connectWs() {
         render();
         break;
       case 'transcript':
-        appendTranscript(msg.messages);
+        // only show messages for the runway this client is watching
+        appendTranscript((msg.messages || []).filter((m) => !m.runway || m.runway === state.runway));
         break;
     }
   };
@@ -217,7 +220,7 @@ function drawSymbol(ctx, t, x, y, color) {
   ctx.fillStyle = color;
   ctx.lineWidth = 1.5;
 
-  if (kind === 'Airplane') {
+  if (kind.startsWith('Air+FixedWing') || kind === 'Airplane') {
     ctx.rotate(((t.hdg || 0) * Math.PI) / 180);
     ctx.beginPath();
     ctx.moveTo(0, -9);
@@ -226,7 +229,7 @@ function drawSymbol(ctx, t, x, y, color) {
     ctx.lineTo(-7, 9);
     ctx.closePath();
     ctx.stroke();
-  } else if (kind === 'Helicopter') {
+  } else if (kind.startsWith('Air+Rotorcraft') || kind === 'Helicopter') {
     ctx.beginPath();
     ctx.arc(0, 0, 6, 0, Math.PI * 2);
     ctx.stroke();
@@ -241,7 +244,7 @@ function drawTrackLabel(ctx, t, x, y, color) {
   ctx.font = '11px Consolas';
   const lines = [t.pilot || t.name || t.id];
   if (t.altFt !== null && t.altFt !== undefined) lines.push(Math.round(t.altFt) + 'ft');
-  if (t.iasKt) lines.push(t.iasKt + 'kt');
+  if (t.spdKt) lines.push(t.spdKt + 'kt');
   lines.forEach((ln, i) => ctx.fillText(ln, x + 10, y - 4 + i * 12));
 }
 
@@ -388,7 +391,7 @@ function renderApproachTable() {
       '<td>' + gsTxt + '</td>' +
       '<td>' + (t.altFt === null ? '-' : t.altFt) + '</td>' +
       '<td>' + (t.vsFpm === null || t.vsFpm === undefined ? '-' : t.vsFpm) + '</td>' +
-      '<td>' + (t.iasKt === null ? '-' : t.iasKt) + '</td>' +
+      '<td>' + (t.spdKt === null ? '-' : t.spdKt) + '</td>' +
       '<td class="' + guidClass + '">' + escapeHtml(ap.guidance) + '</td>';
     tbody.appendChild(tr);
   }
@@ -492,7 +495,7 @@ function drawPpi() {
 function updateOwnshipSelect() {
   const sel = document.getElementById('ownshipSelect');
   const current = state.ownshipId || '';
-  const airborne = state.tracks.filter((t) => t.type === 'Airplane' || t.type === 'Helicopter');
+  const airborne = state.tracks.filter((t) => typeof t.type === 'string' && t.type.startsWith('Air'));
   const ids = new Set(airborne.map((t) => t.id));
 
   // rebuild only when the set changed
@@ -602,9 +605,9 @@ function updateInterceptInfo() {
 
 /* ================= TWR mode ================= */
 
-const TWR_RANGE_NM = 6;
-
 function renderTwr() {
+  document.querySelector('#mode-twr h2').textContent =
+    'Aerodrome View (' + state.twrRangeNm.toFixed(1) + ' nm) - scroll to zoom';
   drawTwrScope();
   renderFieldTable();
 }
@@ -621,7 +624,7 @@ function drawTwrScope() {
   const ref = rwy.threshold;
   const cx = W / 2, cy = H / 2;
   const radius = Math.min(W, H) / 2 - 30;
-  const mPerPx = (TWR_RANGE_NM * M_PER_NM) / radius;
+  const mPerPx = (state.twrRangeNm * M_PER_NM) / radius;
 
   const sx = (x) => cx + x / mPerPx;
   const sy = (y) => cy - y / mPerPx;
@@ -630,7 +633,7 @@ function drawTwrScope() {
   ctx.strokeStyle = '#14202b';
   ctx.fillStyle = '#5a6b7a';
   ctx.font = '11px Consolas';
-  for (let r = 1; r <= TWR_RANGE_NM; r++) {
+  for (let r = 1; r <= state.twrRangeNm; r++) {
     ctx.beginPath();
     ctx.arc(cx, cy, (r * M_PER_NM) / mPerPx, 0, Math.PI * 2);
     ctx.stroke();
@@ -667,10 +670,10 @@ function drawTwrScope() {
   for (const t of state.tracks) {
     if (t.lat === undefined || t.lon === undefined) continue;
     const p = relTo(t.lat, t.lon, ref.lat, ref.lon);
-    if (Math.hypot(p.x, p.y) / M_PER_NM > TWR_RANGE_NM) continue;
+    if (Math.hypot(p.x, p.y) / M_PER_NM > state.twrRangeNm) continue;
     const x = sx(p.x), y = sy(p.y);
 
-    const isGround = t.type !== 'Airplane' && t.type !== 'Helicopter';
+    const isGround = !(typeof t.type === 'string' && t.type.startsWith('Air'));
     const color = isGround ? '#8a9aa8' : t.id === state.selectedId ? '#ffc23d' : '#39ff8b';
     drawSymbol(ctx, t, x, y, color);
     drawTrackLabel(ctx, t, x, y, color);
@@ -696,7 +699,7 @@ function renderFieldTable() {
         brg: normDeg((Math.atan2(p.x, p.y) * 180) / Math.PI),
       };
     })
-    .filter((r) => r.distNm <= TWR_RANGE_NM)
+    .filter((r) => r.distNm <= state.twrRangeNm)
     .sort((a, b) => a.distNm - b.distNm);
 
   for (const r of rows) {
@@ -711,7 +714,7 @@ function renderFieldTable() {
       '<td>' + fmtBrg(r.brg) + '</td>' +
       '<td>' + (t.altFt === null ? '-' : t.altFt) + '</td>' +
       '<td>' + (t.vsFpm === null || t.vsFpm === undefined ? '-' : t.vsFpm) + '</td>' +
-      '<td>' + (t.iasKt === null ? '-' : t.iasKt) + '</td>';
+      '<td>' + (t.spdKt === null ? '-' : t.spdKt) + '</td>';
     tbody.appendChild(tr);
   }
 }
@@ -750,6 +753,40 @@ document.getElementById('gciRange').addEventListener('change', (ev) => {
   state.gciRangeNm = parseInt(ev.target.value, 10);
   render();
 });
+
+/* ---------- mouse wheel zoom ---------- */
+
+function attachWheelZoom(canvasId, getRange, setRange) {
+  document.getElementById(canvasId).addEventListener(
+    'wheel',
+    (ev) => {
+      ev.preventDefault();
+      const factor = ev.deltaY > 0 ? 1.15 : 1 / 1.15; // scroll down = zoom out
+      setRange(getRange() * factor);
+    },
+    { passive: false }
+  );
+}
+
+attachWheelZoom('ppiScope',
+  () => state.gciRangeNm,
+  (v) => {
+    state.gciRangeNm = Math.min(120, Math.max(2, Math.round(v * 10) / 10));
+    const sel = document.getElementById('gciRange');
+    for (const opt of sel.options) {
+      if (Math.abs(parseFloat(opt.value) - state.gciRangeNm) < 0.05) sel.value = opt.value;
+    }
+    render();
+  }
+);
+
+attachWheelZoom('twrScope',
+  () => state.twrRangeNm,
+  (v) => {
+    state.twrRangeNm = Math.min(15, Math.max(1, Math.round(v * 10) / 10));
+    render();
+  }
+);
 
 /* ---------- boot ---------- */
 

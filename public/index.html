@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <h1>DCS Web GCA <span class="subtitle">Ground Controlled Approach Console</span></h1>
+    <h1>DCS Web GCA <span class="subtitle">Air Traffic Console</span></h1>
     <div class="controls">
       <label for="runwaySelect">RWY:</label>
       <select id="runwaySelect"></select>
@@ -16,36 +16,102 @@
     </div>
   </header>
 
-  <main>
-    <section class="scope-panel">
-      <h2>Azimuth</h2>
-      <canvas id="azimuthScope" width="900" height="360"></canvas>
-    </section>
+  <nav class="tabs">
+    <button class="tab active" data-mode="gca">GCA (PAR)</button>
+    <button class="tab" data-mode="gci">GCI (Intercept)</button>
+    <button class="tab" data-mode="twr">TWR (Field)</button>
+  </nav>
 
-    <section class="scope-panel">
-      <h2>Elevation</h2>
-      <canvas id="elevationScope" width="900" height="300"></canvas>
-    </section>
+  <!-- ================= GCA (Precision Approach Radar) ================= -->
+  <section id="mode-gca" class="mode">
+    <main>
+      <section class="scope-panel">
+        <h2>Azimuth</h2>
+        <canvas id="azimuthScope" width="900" height="360"></canvas>
+      </section>
 
-    <section class="table-panel">
-      <h2>Approach Data</h2>
-      <table id="trackTable">
-        <thead>
-          <tr>
-            <th>Callsign</th>
-            <th>Type</th>
-            <th>RNG (nm)</th>
-            <th>AZ DEV</th>
-            <th>GS DEV</th>
-            <th>ALT (ft)</th>
-            <th>IAS (kt)</th>
-            <th>Guidance</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-  </main>
+      <section class="scope-panel">
+        <h2>Elevation</h2>
+        <canvas id="elevationScope" width="900" height="300"></canvas>
+      </section>
+
+      <section class="table-panel">
+        <h2>Approach Data</h2>
+        <table id="trackTable">
+          <thead>
+            <tr>
+              <th>Callsign</th>
+              <th>Type</th>
+              <th>RNG (nm)</th>
+              <th>AZ DEV</th>
+              <th>GS DEV</th>
+              <th>ALT (ft)</th>
+              <th>VS (fpm)</th>
+              <th>IAS (kt)</th>
+              <th>Guidance</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+  </section>
+
+  <!-- ================= GCI (Ground Controlled Intercept) ================= -->
+  <section id="mode-gci" class="mode" hidden>
+    <main>
+      <section class="scope-panel">
+        <div class="gci-controls">
+          <label>OWN:
+            <select id="ownshipSelect"><option value="">-- none --</option></select>
+          </label>
+          <label>RANGE:
+            <select id="gciRange">
+              <option value="10">10 nm</option>
+              <option value="20" selected>20 nm</option>
+              <option value="40">40 nm</option>
+              <option value="80">80 nm</option>
+            </select>
+          </label>
+          <span class="hint">Click a blip to designate TARGET.</span>
+        </div>
+        <canvas id="ppiScope" width="820" height="820"></canvas>
+      </section>
+
+      <section class="table-panel">
+        <h2>Intercept Solution</h2>
+        <div id="interceptInfo" class="info-grid">Select OWN and TARGET.</div>
+      </section>
+    </main>
+  </section>
+
+  <!-- ================= TWR (Aerodrome control) ================= -->
+  <section id="mode-twr" class="mode" hidden>
+    <main>
+      <section class="scope-panel">
+        <h2>Aerodrome View (6 nm)</h2>
+        <canvas id="twrScope" width="900" height="640"></canvas>
+      </section>
+
+      <section class="table-panel">
+        <h2>Field Traffic</h2>
+        <table id="fieldTable">
+          <thead>
+            <tr>
+              <th>Callsign</th>
+              <th>Type</th>
+              <th>RNG (nm)</th>
+              <th>BRG</th>
+              <th>ALT (ft)</th>
+              <th>VS (fpm)</th>
+              <th>IAS (kt)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+  </section>
 
   <script src="js/main.js"></script>
 </body>

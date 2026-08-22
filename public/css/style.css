@@ -43,7 +43,32 @@ h2 { font-size: 0.8rem; color: var(--dim); margin: 0 0 6px 0; text-transform: up
 .status.connected { color: var(--green); border: 1px solid var(--green); }
 .status.disconnected { color: var(--red); border: 1px solid var(--red); }
 
-main { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 20px 0;
+  background: var(--panel);
+  border-bottom: 1px solid #1d2a36;
+}
+
+.tab {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid #1d2a36;
+  border-bottom: none;
+  padding: 8px 18px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.tab.active {
+  color: var(--green);
+  background: var(--bg);
+  border-color: #2a5a3a;
+}
+
+.mode main { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
 
 .scope-panel, .table-panel {
   background: var(--panel);
@@ -58,3 +83,32 @@ th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #1d2a36; 
 th { color: var(--dim); font-weight: normal; text-transform: uppercase; font-size: 0.7rem; }
 td.guidance-ok { color: var(--green); }
 td.guidance-warn { color: var(--amber); }
+
+.gci-controls {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+
+.gci-controls select {
+  background: #16202a;
+  color: var(--text);
+  border: 1px solid #2a3a4a;
+  padding: 3px 6px;
+  font-family: inherit;
+}
+
+.gci-controls .hint { color: var(--dim); font-size: 0.75rem; }
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  font-size: 0.95rem;
+}
+
+.info-grid .cell { padding: 8px; background: #0c1218; border: 1px solid #1d2a36; }
+.info-grid .cell .k { color: var(--dim); font-size: 0.7rem; text-transform: uppercase; }
+.info-grid .cell .v { color: var(--green); margin-top: 4px; }

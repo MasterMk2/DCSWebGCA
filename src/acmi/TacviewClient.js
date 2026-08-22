@@ -107,9 +107,11 @@ class TacviewClient extends EventEmitter {
       }
 
       let idx;
+      // ACMI frames are line-based; strip any NUL bytes from the handshake reply
       while ((idx = this.buffer.indexOf('\n')) >= 0) {
-        const line = this.buffer.slice(0, idx).replace(/\r$/, '');
+        const line = this.buffer.slice(0, idx).replace(/\r$/, '').replace(/\0/g, '');
         this.buffer = this.buffer.slice(idx + 1);
+        if (!line) continue;
         try {
           this.parser.handleLine(line);
         } catch (err) {

@@ -70,20 +70,6 @@ h2 { font-size: 0.8rem; color: var(--dim); margin: 0 0 6px 0; text-transform: up
 
 .mode main { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
 
-.scope-panel, .table-panel {
-  background: var(--panel);
-  border: 1px solid #1d2a36;
-  padding: 12px;
-}
-
-canvas { display: block; width: 100%; height: auto; background: #060a0d; }
-
-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #1d2a36; }
-th { color: var(--dim); font-weight: normal; text-transform: uppercase; font-size: 0.7rem; }
-td.guidance-ok { color: var(--green); }
-td.guidance-warn { color: var(--amber); }
-
 .gci-controls {
   display: flex;
   align-items: center;
@@ -112,3 +98,27 @@ td.guidance-warn { color: var(--amber); }
 .info-grid .cell { padding: 8px; background: #0c1218; border: 1px solid #1d2a36; }
 .info-grid .cell .k { color: var(--dim); font-size: 0.7rem; text-transform: uppercase; }
 .info-grid .cell .v { color: var(--green); margin-top: 4px; }
+
+.scope-panel, .table-panel {
+  background: var(--panel);
+  border: 1px solid #1d2a36;
+  padding: 12px;
+}
+
+canvas { display: block; width: 100%; height: auto; background: #060a0d; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #1d2a36; }
+th { color: var(--dim); font-weight: normal; text-transform: uppercase; font-size: 0.7rem; }
+td.guidance-ok { color: var(--green); }
+td.guidance-warn { color: var(--amber); }
+
+.log-panel {
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.log-line { white-space: pre-wrap; }
+.log-time { color: var(--dim); margin-right: 8px; }

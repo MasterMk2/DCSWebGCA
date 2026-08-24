@@ -1,5 +1,31 @@
 # Release Notes
 
+## v0.5.0 (2026-08-24)
+
+### Added
+
+- **Protocol diagnostics mode** (#8): set `TACVIEW_DEBUG=1` to collect a
+  one-flight picture of what the DCS host actually sends — the raw handshake
+  string, `ReferenceLongitude` / `ReferenceLatitude`, a transform field-count
+  histogram (3/5/9-field records), a `Type` string census, raw-vs-absolute
+  coordinate samples and ground-speed statistics — exposed at
+  `GET /api/diagnostics`. Optionally dump the first N raw lines to a file with
+  `TACVIEW_DEBUG_DUMP`. With `TACVIEW_DEBUG` unset the collector is never
+  attached, so runtime overhead is zero.
+- **Mock Tacview password support**: `tools/mock-tacview.js` now honours
+  `MOCK_PASSWORD` to require the `XtraLib.Stream.0\n...join <password>`
+  handshake, so the password handshake path can be exercised locally without a
+  real DCS server.
+- **Issue #8 verification guide** (`docs/issue8-verification.md`): step-by-step
+  instructions mapping each of Issue #8's seven checklist items to the specific
+  diagnostics / state fields that answer it, so a single flight against a real
+  DCS server completes the field verification.
+
+### Tests
+
+- 5 new unit tests covering the diagnostics collector (19 total); the smoke
+  test now also exercises `GET /api/diagnostics`.
+
 ## v0.4.0 (2026-08-24)
 
 ### Added

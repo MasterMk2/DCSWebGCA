@@ -1,6 +1,6 @@
 {
   "name": "dcs-web-gca",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Web-based GCA (Ground Controlled Approach) console for DCS World dedicated servers, fed by Tacview ACMI real-time telemetry",
   "main": "src/index.js",
   "scripts": {

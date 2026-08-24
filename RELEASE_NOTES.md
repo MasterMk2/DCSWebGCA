@@ -1,5 +1,54 @@
 # Release Notes
 
+## v0.4.0 (2026-08-24)
+
+### Added
+
+- **LSO mode**: carrier landing aid view. Pick a carrier (Sea track) and an
+  aircraft and the console shows a lineup cross-section plus a glideslope
+  profile against the carrier's deck (3.0° reference path), with range,
+  altitude above deck, GS deviation, lineup, AoA (when the stream provides it)
+  and an LSO-style call ("HIGH / COME LEFT"). Wheel/pinch zoom 1–8 nm.
+- **PERF indicator**: the header can show live refresh-rate / latency stats —
+  UPD Hz (WebSocket frames received per second) and LAT ms (transport latency
+  from the server's `sentAt` stamp). Toggled with the PERF button and the
+  on/off state is persisted in `localStorage`.
+- **LSO Platform View**: pseudo view from the LSO platform astern of the
+  carrier. The horizon rolls against the lineup error, the flight deck rides
+  up/down against the glideslope error, and the aircraft is drawn as a
+  range-scaled aft silhouette against the fixed 3.0° datum line with an
+  LSO-style callout — above/below path and deck up/down at a glance.
+- **Map background**: the GCI PPI and TWR field scopes can overlay dimmed
+  OpenStreetMap tiles as a geographic underlay. Toggled with the MAP button
+  (persisted in `localStorage`); tile load failures fall back silently to the
+  plain radar display so offline operation is unaffected.
+- **Receive-latency indicator**: the server now stamps each `tracks` frame with
+  a `sentAt` timestamp and the console shows the transport latency (LAT) in the
+  header, falling back to snapshot age when client/server clocks diverge.
+- **Mock carrier**: `tools/mock-tacview.js` now also streams a slow-steaming
+  carrier (`CVN-71`, `Sea+Watercraft`) on the extended centreline plus an
+  F/A-18C riding the 3° glideslope from 5 nm astern, so the LSO mode (carrier
+  dropdown, lineup cross-section, Platform View) can be verified in the browser
+  without DCS. The server-side snapshot now passes Sea tracks through so the
+  CARRIER dropdown can be populated.
+
+### Fixed
+
+- **LSO header text overprint**: the mode label in the top-left corner of the
+  LSO scope was drawn repeatedly on top of itself, smearing into an unreadable
+  blob. `grid()` now takes a `yLabelX` argument so each view places its
+  y-axis labels at its own x offset.
+- **LSO Platform View viewpoint**: the pseudo view no longer follows the
+  aircraft; it is now pinned to a fixed LSO-platform vantage point astern of
+  the carrier, so horizon roll and deck ride read correctly against the 3.0°
+  datum line.
+- **Mock localizer warp**: `tools/mock-tacview.js` could teleport the aircraft
+  across the localizer when wrapping around. The mock now flies a full
+  landing-cycle round trip (5 nm final → deck → climb-out → re-entry to the
+  abeam start) instead of hard-wrapping, so LSO/GCA sessions run continuously.
+- **Smoke test**: `tools/smoke-test.js` now also verifies that every `tracks`
+  frame carries a numeric `sentAt` timestamp, guarding the latency display.
+
 ## v0.3.0 (2026-08-22)
 
 Security, usability and robustness release.

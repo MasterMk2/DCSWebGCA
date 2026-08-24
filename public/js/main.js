@@ -6,6 +6,7 @@
  *   GCA - Precision Approach Radar (azimuth + elevation scopes, talk-down log)
  *   GCI - Ground Controlled Intercept (PPI scope + intercept solution)
  *   TWR - Aerodrome control (field view + traffic list)
+ *   LSO - Carrier landing aid (glideslope + lineup against a Sea track)
  *
  * Every browser subscribes to its own (server, runway) pair; nothing here is
  * shared with the other controllers connected to the same console.
@@ -40,9 +41,12 @@ const state = {
   selectedId: null, // GCA table selection
   targetId: null,   // GCI target
   ownshipId: null,  // GCI ownship
+  carrierId: null,     // LSO carrier (Sea track)
+  lsoAircraftId: null, // LSO aircraft being talked onto the deck
   gciRangeNm: 20,
   twrRangeNm: 6,
   gcaRangeNm: 12,
+  lsoRangeNm: 4,
   tolerance: { azToleranceDeg: 0.8, gsToleranceDeg: 0.4 },
 };
 
@@ -147,6 +151,8 @@ function connectWs() {
         state.counts = msg.counts;
         state.streaming = msg.connected;
         if (msg.runway) state.runwayId = msg.runway;
+        recordTrackArrival();
+        updateLatency(msg);
         updateInfoBar();
         render();
         break;
@@ -163,6 +169,54 @@ function setConnStatus(up) {
   const el = document.getElementById('connStatus');
   el.textContent = up ? 'CONNECTED' : 'DISCONNECTED';
   el.className = 'status ' + (up ? 'connected' : 'disconnected');
+}
+
+/* ---------- refresh rate / latency HUD ---------- */
+
+/* Small mode-independent HUD in the header: measured WebSocket update
+ * frequency plus server->client latency, e.g. "UPD 4.9 Hz | LAT 120 ms".
+ * The user can hide it with the PERF toggle (persisted in localStorage). */
+
+const perfPrefs = { enabled: localStorage.getItem('gcaPerf') !== 'off' };
+
+const PERF_WINDOW = 20; // tracks arrivals kept for the rolling rate estimate
+const trackArrivals = []; // arrival timestamps of the last N 'tracks' messages
+
+function recordTrackArrival() {
+  trackArrivals.push(Date.now());
+  if (trackArrivals.length > PERF_WINDOW) trackArrivals.shift();
+}
+
+/** updates per second over the rolling window, or null until two samples */
+function updateRateHz() {
+  if (trackArrivals.length < 2) return null;
+  const spanMs = trackArrivals[trackArrivals.length - 1] - trackArrivals[0];
+  if (spanMs <= 0) return null;
+  return ((trackArrivals.length - 1) * 1000) / spanMs;
+}
+
+function updateLatency(msg) {
+  const el = document.getElementById('latency');
+  if (!perfPrefs.enabled) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+
+  const hz = updateRateHz();
+
+  // server send timestamp -> client receipt; fall back to the snapshot age
+  // when the two clocks are too far apart for the difference to mean anything
+  const now = Date.now();
+  let ms = typeof msg.sentAt === 'number' ? Math.max(0, now - msg.sentAt) : null;
+  if (ms === null || ms > 10000) {
+    ms = typeof msg.time === 'number' ? Math.max(0, now - msg.time) : null;
+  }
+
+  el.textContent =
+    'UPD ' + (hz === null ? '--' : hz.toFixed(1)) + ' Hz | LAT ' +
+    (ms === null ? '--' : String(Math.round(ms))) + ' ms';
+  el.className = 'status ' + (ms !== null && ms < 250 ? 'connected' : 'lat-warn');
 }
 
 function send(msg) {
@@ -286,6 +340,7 @@ function render() {
   if (state.mode === 'gca') renderGca();
   else if (state.mode === 'gci') renderGci();
   else if (state.mode === 'twr') renderTwr();
+  else if (state.mode === 'lso') renderLso();
 }
 
 function pruneSelections() {
@@ -293,6 +348,8 @@ function pruneSelections() {
   if (state.selectedId && !ids.has(state.selectedId)) state.selectedId = null;
   if (state.targetId && !ids.has(state.targetId)) state.targetId = null;
   if (state.ownshipId && !ids.has(state.ownshipId)) state.ownshipId = null;
+  if (state.carrierId && !ids.has(state.carrierId)) state.carrierId = null;
+  if (state.lsoAircraftId && !ids.has(state.lsoAircraftId)) state.lsoAircraftId = null;
 }
 
 function clearBlips(canvasId) {
@@ -600,7 +657,7 @@ function drawElevation() {
   }
 }
 
-function grid(ctx, xOf, yOf, padL, padT, plotW, plotH, xLabel, yLabel, maxRange) {
+function grid(ctx, xOf, yOf, padL, padT, plotW, plotH, xLabel, yLabel, maxRange, yLabelX) {
   ctx.strokeStyle = '#14202b';
   ctx.fillStyle = '#5a6b7a';
   ctx.font = '11px Consolas, monospace';
@@ -623,7 +680,7 @@ function grid(ctx, xOf, yOf, padL, padT, plotW, plotH, xLabel, yLabel, maxRange)
     ctx.lineTo(padL + plotW, y);
     ctx.stroke();
   }
-  ctx.fillText(yLabel, 8, padT + 10);
+  ctx.fillText(yLabel, yLabelX === undefined ? 8 : yLabelX, padT + 10);
 }
 
 function renderApproachTable() {
@@ -665,6 +722,104 @@ function renderApproachTable() {
   }
 }
 
+/* ---------- map background (OpenStreetMap tiles) ---------- */
+
+/* Optional geographic underlay for the north-up scopes (GCI PPI, TWR field
+ * view). Tiles come from the OSM tile CDN and are cached in memory; a tile
+ * that cannot be loaded (offline, blocked CDN) is marked failed and never
+ * retried, so the scopes simply fall back to plain radar. */
+
+const MAP_TILE_URL = 'https://tile.openstreetmap.org';
+const MAP_TILE_PX = 256;
+const MAP_ALPHA = 0.35;
+const MAP_CACHE_MAX = 400;
+
+const mapPrefs = { enabled: localStorage.getItem('gcaMap') !== 'off' };
+const tileCache = new Map(); // url -> { img, ready, failed }
+let mapRenderQueued = false;
+
+function lonToTileX(lon, z) {
+  return ((lon + 180) / 360) * Math.pow(2, z);
+}
+
+function latToTileY(lat, z) {
+  const rad = (Math.max(-85.05, Math.min(85.05, lat)) * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, z);
+}
+
+function getTile(url) {
+  let entry = tileCache.get(url);
+  if (!entry) {
+    if (tileCache.size >= MAP_CACHE_MAX) tileCache.delete(tileCache.keys().next().value);
+    const img = new Image();
+    entry = { img, ready: false, failed: false };
+    tileCache.set(url, entry);
+    img.onload = () => {
+      entry.ready = true;
+      scheduleMapRender();
+    };
+    img.onerror = () => {
+      entry.failed = true; // offline -> keep radar-only
+    };
+    img.src = url;
+  }
+  return entry;
+}
+
+function scheduleMapRender() {
+  if (mapRenderQueued) return;
+  mapRenderQueued = true;
+  requestAnimationFrame(() => {
+    mapRenderQueued = false;
+    render();
+  });
+}
+
+/** dim OSM raster under a north-up scope centred on `ref` (threshold lat/lon) */
+function drawMapBackground(ctx, W, H, ref, mPerPx) {
+  if (!mapPrefs.enabled || !ref || ref.lat === undefined || ref.lon === undefined) return;
+
+  const latRad = (ref.lat * Math.PI) / 180;
+  const zoom = Math.max(
+    3,
+    Math.min(16, Math.round(Math.log2((156543.034 * Math.cos(latRad)) / mPerPx)))
+  );
+  const resM = (156543.034 * Math.cos(latRad)) / Math.pow(2, zoom); // metres per tile pixel
+  const k = resM / mPerPx; // canvas pixels per tile pixel
+  const cxp = lonToTileX(ref.lon, zoom) * MAP_TILE_PX;
+  const cyp = latToTileY(ref.lat, zoom) * MAP_TILE_PX;
+
+  const x0 = Math.floor((cxp - W / 2 / k) / MAP_TILE_PX);
+  const x1 = Math.floor((cxp + W / 2 / k) / MAP_TILE_PX);
+  const y0 = Math.floor((cyp - H / 2 / k) / MAP_TILE_PX);
+  const y1 = Math.floor((cyp + H / 2 / k) / MAP_TILE_PX);
+  const n = Math.pow(2, zoom);
+
+  ctx.save();
+  ctx.globalAlpha = MAP_ALPHA;
+  for (let tx = x0; tx <= x1; tx++) {
+    for (let ty = Math.max(0, y0); ty <= Math.min(n - 1, y1); ty++) {
+      const wx = ((tx % n) + n) % n;
+      const entry = getTile(`${MAP_TILE_URL}/${zoom}/${wx}/${ty}.png`);
+      if (!entry.ready || entry.failed) continue;
+      ctx.drawImage(
+        entry.img,
+        W / 2 + (tx * MAP_TILE_PX - cxp) * k,
+        H / 2 + (ty * MAP_TILE_PX - cyp) * k,
+        MAP_TILE_PX * k + 1,
+        MAP_TILE_PX * k + 1
+      );
+    }
+  }
+  ctx.restore();
+
+  ctx.fillStyle = '#5a6b7a';
+  ctx.font = '10px Consolas, monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('© OpenStreetMap contributors', W - 8, H - 8);
+  ctx.textAlign = 'left';
+}
+
 /* ================= GCI mode ================= */
 
 function renderGci() {
@@ -688,6 +843,8 @@ function drawPpi() {
 
   const sx = (x) => cx + x / mPerPx;
   const sy = (y) => cy - y / mPerPx;
+
+  drawMapBackground(ctx, W, H, rwy.threshold, mPerPx);
 
   ctx.strokeStyle = '#14202b';
   ctx.fillStyle = '#5a6b7a';
@@ -893,6 +1050,8 @@ function drawTwrScope() {
   const sx = (x) => cx + x / mPerPx;
   const sy = (y) => cy - y / mPerPx;
 
+  drawMapBackground(ctx, W, H, rwy.threshold, mPerPx);
+
   ctx.strokeStyle = '#14202b';
   ctx.fillStyle = '#5a6b7a';
   ctx.font = '11px Consolas, monospace';
@@ -983,6 +1142,461 @@ function renderFieldTable() {
   }
 }
 
+/* ================= LSO mode ================= */
+
+/* IFLOLS-style carrier landing aid. The reference is the carrier (Sea) track
+ * itself: the deck is assumed to sit at the carrier's position and altitude,
+ * and the approach course is the carrier's heading (into-wind recovery). */
+
+const LSO_GLIDEPATH_DEG = 3.0;
+const LSO_MIN_RANGE_NM = 1;
+const LSO_MAX_RANGE_NM = 8;
+
+function carriers() {
+  return state.tracks.filter((t) => t.category === 'Sea');
+}
+
+function carrierCfg() {
+  return state.tracks.find((t) => t.id === state.carrierId) || null;
+}
+
+/** offsets in metres (east, north) of a track from an arbitrary reference track */
+function relToRef(t, ref) {
+  if (t.u !== undefined && t.u !== null && ref.u !== undefined && ref.u !== null) {
+    return { x: t.u - ref.u, y: t.v - ref.v };
+  }
+  if (t.lat === undefined || t.lat === null || ref.lat === undefined) return null;
+  const latRad = (ref.lat * Math.PI) / 180;
+  return {
+    x: (t.lon - ref.lon) * 111320 * Math.cos(latRad),
+    y: (t.lat - ref.lat) * 111320,
+  };
+}
+
+/** glideslope / lineup solution of `ac` relative to the carrier's deck */
+function lsoSolution(ac, car) {
+  const off = relToRef(ac, car);
+  if (!off) return null;
+
+  const hdgRad = (courseDeg(car) * Math.PI) / 180;
+  const sinH = Math.sin(hdgRad);
+  const cosH = Math.cos(hdgRad);
+
+  // same convention as the PAR: an aircraft on final sits astern of the
+  // reference point flying towards it, so dot(rel, heading) is negative
+  const along = -(off.x * sinH + off.y * cosH); // metres still to fly
+  const cross = off.x * cosH - off.y * sinH;    // + right of centreline
+
+  const deckAltFt = car.altFt !== null && car.altFt !== undefined ? car.altFt : 0;
+  const aglFt = ac.altFt !== null && ac.altFt !== undefined ? ac.altFt - deckAltFt : null;
+
+  const elevDeg =
+    along > 50 && aglFt !== null ? (Math.atan2(aglFt * 0.3048, along) * 180) / Math.PI : null;
+  const lineupDeg = along > 50 ? (Math.atan2(cross, along) * 180) / Math.PI : null;
+
+  return {
+    rangeNm: Math.hypot(off.x, off.y) / M_PER_NM,
+    alongNm: along / M_PER_NM,
+    crossNm: cross / M_PER_NM,
+    aglFt,
+    gsDevDeg: elevDeg !== null ? elevDeg - LSO_GLIDEPATH_DEG : null,
+    lineupDeg,
+    // Tacview does not carry AoA; shown when a future stream provides it
+    aoaDeg: ac.aoaDeg !== undefined && ac.aoaDeg !== null ? ac.aoaDeg : null,
+  };
+}
+
+function renderLso() {
+  updateCarrierSelect();
+  updateLsoPilotSelect();
+  drawLsoScope();
+  drawLsoPlatformView();
+  updateLsoInfo();
+}
+
+function updateCarrierSelect() {
+  const sel = document.getElementById('carrierSelect');
+  const list = carriers();
+  const sig = list.map((t) => t.id).join(',');
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '-- none --';
+    sel.appendChild(none);
+    for (const c of list) {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.name || c.id;
+      sel.appendChild(opt);
+    }
+  }
+  sel.value = list.some((t) => t.id === state.carrierId) ? state.carrierId : '';
+  if (sel.value === '') state.carrierId = null;
+  sel.onchange = () => {
+    state.carrierId = sel.value || null;
+    render();
+  };
+}
+
+function updateLsoPilotSelect() {
+  const sel = document.getElementById('lsoPilotSelect');
+  const car = carrierCfg();
+  const carId = car ? car.id : null;
+  const list = state.tracks.filter((t) => isAircraft(t) && !t.onGround && t.id !== carId);
+  const ids = new Set(list.map((t) => t.id));
+
+  const sig = list.map((t) => t.id).join(',');
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '-- none --';
+    sel.appendChild(none);
+    for (const t of list) {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.pilot || t.name || t.id;
+      sel.appendChild(opt);
+    }
+  }
+  sel.value = ids.has(state.lsoAircraftId) ? state.lsoAircraftId : '';
+  if (sel.value === '') state.lsoAircraftId = null;
+  sel.onchange = () => {
+    state.lsoAircraftId = sel.value || null;
+    render();
+  };
+}
+
+function drawLsoScope() {
+  const canvas = document.getElementById('lsoScope');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  clearBlips('lsoScope');
+
+  const car = carrierCfg();
+  ctx.fillStyle = '#5a6b7a';
+  ctx.font = '13px Consolas, monospace';
+  if (!car) {
+    ctx.fillText('select a carrier (Sea) track', 20, H / 2);
+    return;
+  }
+
+  const R = state.lsoRangeNm;
+  const mid = W / 2;
+
+  /* ----- left panel: LINEUP (top-down view along the recovery course) ----- */
+  const padL = 50, padR = 25, padT = 30, padB = 30;
+  const plotW = mid - padL - padR, plotH = H - padT - padB;
+  const C = Math.max(0.15, R / 8); // cross-track half width (nm)
+
+  const lxOf = (nm) => padL + (nm / R) * plotW;
+  const lyOf = (crossNm) => padT + ((C - crossNm) / (2 * C)) * plotH;
+
+  grid(ctx, lxOf, lyOf, padL, padT, plotW, plotH, 'RNG nm', 'LINEUP', R);
+
+  ctx.strokeStyle = '#2a5a3a';
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.moveTo(lxOf(0), lyOf(0));
+  ctx.lineTo(lxOf(R), lyOf(0));
+  ctx.stroke();
+
+  // +/- 1 deg lineup corridors
+  ctx.strokeStyle = '#1e3a28';
+  for (const dev of [1, -1]) {
+    ctx.beginPath();
+    ctx.moveTo(lxOf(0), lyOf(0));
+    ctx.lineTo(lxOf(R), lyOf(Math.tan((dev * Math.PI) / 180) * R));
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#7aa892';
+  ctx.fillText('DECK', lxOf(0) + 6, lyOf(0) - 8);
+
+  /* ----- right panel: GLIDESLOPE (altitude above deck vs distance) ----- */
+  const gPadL = 60;
+  const gPlotW = W - mid - gPadL - padR;
+  const ALT = Math.max(
+    500,
+    Math.round((Math.tan((LSO_GLIDEPATH_DEG * Math.PI) / 180) * R * M_PER_NM * 3.28084) / 250) * 250
+  );
+
+  const gxOf = (nm) => mid + gPadL + (nm / R) * gPlotW;
+  const gyOf = (aglFt) => padT + ((ALT - aglFt) / ALT) * plotH;
+
+  grid(ctx, gxOf, gyOf, mid + gPadL, padT, gPlotW, plotH, 'RNG nm', 'AGL ft', R, mid + gPadL - 44);
+
+  ctx.strokeStyle = '#2a5a3a';
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.moveTo(gxOf(0), gyOf(0));
+  ctx.lineTo(gxOf(R), gyOf(Math.tan((LSO_GLIDEPATH_DEG * Math.PI) / 180) * R * M_PER_NM * 3.28084));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#5a6b7a';
+  ctx.font = '11px Consolas, monospace';
+  ctx.fillText(
+    LSO_GLIDEPATH_DEG.toFixed(1) + '° GP',
+    gxOf(R * 0.55),
+    gyOf(Math.tan((LSO_GLIDEPATH_DEG * Math.PI) / 180) * R * 0.55 * M_PER_NM * 3.28084) - 6
+  );
+
+  /* ----- the aircraft ----- */
+  const ac = state.tracks.find((t) => t.id === state.lsoAircraftId);
+  if (!ac) return;
+  const sol = lsoSolution(ac, car);
+  if (!sol || sol.alongNm < -0.2 || sol.alongNm > R) return;
+
+  const color = '#4dc3ff';
+  const lx = lxOf(sol.alongNm), ly = lyOf(sol.crossNm);
+  drawSymbol(ctx, ac, lx, ly, color);
+  drawTrackLabel(ctx, ac, lx, ly, color);
+  registerBlip('lsoScope', ac.id, lx, ly);
+
+  if (sol.aglFt !== null && sol.aglFt < ALT) {
+    const gx = gxOf(sol.alongNm), gy = gyOf(sol.aglFt);
+    drawSymbol(ctx, ac, gx, gy, color);
+    registerBlip('lsoScope', ac.id, gx, gy);
+  }
+}
+
+function updateLsoInfo() {
+  const el = document.getElementById('lsoInfo');
+  const car = carrierCfg();
+  const ac = state.tracks.find((t) => t.id === state.lsoAircraftId);
+
+  if (!car || !ac) {
+    el.innerHTML = '<div class="cell">Select a CARRIER and an AIRCRAFT (dropdown or click a blip).</div>';
+    return;
+  }
+
+  const sol = lsoSolution(ac, car);
+  if (!sol) {
+    el.innerHTML = '<div class="cell">No position data.</div>';
+    return;
+  }
+
+  const gpTxt =
+    sol.gsDevDeg === null ? '-' : (sol.gsDevDeg > 0 ? '+' : '') + sol.gsDevDeg.toFixed(2) + '°';
+  const luTxt =
+    sol.lineupDeg === null
+      ? '-'
+      : (sol.lineupDeg > 0 ? 'R ' : 'L ') + Math.abs(sol.lineupDeg).toFixed(2) + '°';
+
+  const cells = [
+    ['CARRIER', car.name || car.id],
+    ['AIRCRAFT', ac.pilot || ac.name || ac.id],
+    ['RNG (nm)', sol.rangeNm.toFixed(2)],
+    ['ALT AGL (ft)', sol.aglFt === null ? '-' : Math.round(sol.aglFt)],
+    ['GS DEV', gpTxt],
+    ['LINEUP', luTxt],
+    ['AoA', sol.aoaDeg === null ? '-' : sol.aoaDeg.toFixed(1) + '°'],
+    ['CALL', lsoCall(sol)],
+  ];
+  el.innerHTML = cells
+    .map(
+      ([k, v]) =>
+        '<div class="cell"><div class="k">' + escapeHtml(k) + '</div><div class="v">' + escapeHtml(v) + '</div></div>'
+    )
+    .join('');
+}
+
+/** short LSO-style deviation call, e.g. "HIGH / COME LEFT" or "ON PATH / ON LINEUP" */
+function lsoCall(sol) {
+  if (sol.gsDevDeg === null || sol.lineupDeg === null) return '-';
+  const parts = [];
+  parts.push(Math.abs(sol.gsDevDeg) < 0.75 ? 'ON PATH' : sol.gsDevDeg > 0 ? 'HIGH' : 'LOW');
+  parts.push(Math.abs(sol.lineupDeg) < 1.0 ? 'ON LINEUP' : sol.lineupDeg > 0 ? 'COME LEFT' : 'COME RIGHT');
+  return parts.join(' / ');
+}
+
+/* ---------- LSO Platform View ---------- */
+
+/* Pseudo view from the LSO platform astern of the carrier: the camera is
+ * fixed to the platform, so the horizon, flight deck and datum stay put in
+ * the frame (only a small decorative roll remains) while the aircraft moves
+ * as an aft silhouette proportionally to its lineup / glideslope errors.
+ * All data comes from lsoSolution(); no AoA or other unavailable inputs. */
+
+const PLATFORM_ROLL_PER_DEG = 0.4;   // decorative horizon tilt per lineup deg
+const PLATFORM_ROLL_MAX_DEG = 2;     // clamp so the horizon stays near level
+const PLATFORM_PX_PER_DEG_AZ = 14;   // lateral aircraft movement per lineup deg
+const PLATFORM_PX_PER_DEG_GS = 22;   // vertical aircraft movement per GS deg
+
+function drawLsoPlatformView() {
+  const canvas = document.getElementById('lsoPlatformScope');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const car = carrierCfg();
+  const ac = state.tracks.find((t) => t.id === state.lsoAircraftId);
+  ctx.fillStyle = '#5a6b7a';
+  ctx.font = '13px Consolas, monospace';
+  if (!car) {
+    ctx.fillText('select a carrier (Sea) track', 20, H / 2);
+    return;
+  }
+  if (!ac) {
+    ctx.fillText('select an aircraft', 20, H / 2);
+    return;
+  }
+  const sol = lsoSolution(ac, car);
+  if (!sol || sol.lineupDeg === null) {
+    ctx.fillText('no solution data', 20, H / 2);
+    return;
+  }
+
+  const cx = W / 2;
+  const hy = H * 0.40;          // nominal horizon height
+  const datumY = hy + H * 0.16; // where the jet sits when exactly on the 3.0° path
+
+  /* ----- horizon: fixed to the platform, with only a small decorative roll -----
+   * the camera is bolted to the LSO platform, so the sea stays level */
+  const rollDeg = Math.max(
+    -PLATFORM_ROLL_MAX_DEG,
+    Math.min(PLATFORM_ROLL_MAX_DEG, -sol.lineupDeg * PLATFORM_ROLL_PER_DEG)
+  );
+  ctx.save();
+  ctx.translate(cx, hy);
+  ctx.rotate((rollDeg * Math.PI) / 180);
+  ctx.fillStyle = '#08131c'; // sea shading below the horizon
+  ctx.fillRect(-W, 0, 2 * W, H);
+  ctx.strokeStyle = '#7aa892';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-W, 0);
+  ctx.lineTo(W, 0);
+  ctx.stroke();
+  ctx.restore();
+
+  /* ----- flight deck: fixed position and scale -----
+   * the camera sits on the platform, so the deck never moves in the frame;
+   * only the aircraft's silhouette shifts with its errors */
+  const deckCy = datumY;
+  const dw = 150;
+  const dh = 22;
+
+  // hull below the deck
+  ctx.fillStyle = '#101c26';
+  ctx.strokeStyle = '#3a5a4a';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - dw * 0.72, deckCy + dh);
+  ctx.lineTo(cx + dw * 0.72, deckCy + dh);
+  ctx.lineTo(cx + dw * 0.58, deckCy + dh + 16);
+  ctx.lineTo(cx - dw * 0.58, deckCy + dh + 16);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // angled flight deck
+  ctx.fillStyle = '#13251d';
+  ctx.beginPath();
+  ctx.moveTo(cx - dw / 2, deckCy - dh / 2);
+  ctx.lineTo(cx + dw / 2, deckCy - dh / 2);
+  ctx.lineTo(cx + dw * 0.58, deckCy + dh / 2);
+  ctx.lineTo(cx - dw * 0.58, deckCy + dh / 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // deck edge lights
+  ctx.fillStyle = '#ffc23d';
+  for (const fx of [-dw / 2, -dw / 4, 0, dw / 4, dw / 2]) {
+    ctx.fillRect(cx + fx - 1.5, deckCy - dh / 2 - 3, 3, 3);
+  }
+
+  ctx.fillStyle = '#7aa892';
+  ctx.font = '11px Consolas, monospace';
+  ctx.fillText('DECK', cx + dw / 2 + 8, deckCy);
+
+  /* ----- 3.0° glidepath datum -----
+   * fixed reference: the jet belongs on this line at its present range */
+  ctx.strokeStyle = '#2a5a3a';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(W * 0.12, datumY);
+  ctx.lineTo(W * 0.88, datumY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#39ff8b';
+  ctx.font = '11px Consolas, monospace';
+  ctx.fillText(LSO_GLIDEPATH_DEG.toFixed(1) + '° DATUM', W * 0.12, datumY - 6);
+
+  /* ----- the aircraft: aft silhouette, size from range ----- */
+  const azOff = Math.max(-W * 0.3, Math.min(W * 0.3, sol.lineupDeg * PLATFORM_PX_PER_DEG_AZ));
+  const gsPix =
+    sol.gsDevDeg === null
+      ? 0
+      : Math.max(-H * 0.32, Math.min(H * 0.32, -sol.gsDevDeg * PLATFORM_PX_PER_DEG_GS));
+  const ax = cx + azOff;
+  const ay = datumY + gsPix;
+  const s = Math.max(9, Math.min(32, 22000 / (sol.alongNm * M_PER_NM)));
+
+  drawAftSilhouette(ctx, ax, ay, s, '#4dc3ff');
+
+  /* ----- status overlay ----- */
+  ctx.font = '13px Consolas, monospace';
+  ctx.fillStyle = '#5a6b7a';
+  ctx.fillText('PLATFORM VIEW', 14, 20);
+
+  const call = lsoCall(sol);
+  const bad = call.indexOf('LOW') >= 0 || call.indexOf('HIGH') >= 0 || call.indexOf('COME') >= 0;
+  ctx.fillStyle = call === '-' ? '#5a6b7a' : bad ? '#ffc23d' : '#39ff8b';
+  ctx.textAlign = 'right';
+  ctx.fillText(call, W - 14, 20);
+  ctx.textAlign = 'left';
+
+  ctx.fillStyle = '#5a6b7a';
+  ctx.font = '11px Consolas, monospace';
+  ctx.fillText(
+    'RNG ' + sol.rangeNm.toFixed(2) + ' nm  AGL ' +
+      (sol.aglFt === null ? '-' : Math.round(sol.aglFt)) + ' ft',
+    14,
+    H - 12
+  );
+}
+
+/** rear-view aircraft silhouette used by the platform view */
+function drawAftSilhouette(ctx, x, y, s, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1.5, s * 0.09);
+
+  // wings
+  ctx.beginPath();
+  ctx.moveTo(-s, s * 0.15);
+  ctx.lineTo(s, s * 0.15);
+  ctx.stroke();
+  // fuselage
+  ctx.beginPath();
+  ctx.moveTo(0, -s * 0.55);
+  ctx.lineTo(0, s * 0.55);
+  ctx.stroke();
+  // tailplanes
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.38, s * 0.45);
+  ctx.lineTo(s * 0.38, s * 0.45);
+  ctx.stroke();
+  // twin vertical tails
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.14, s * 0.45);
+  ctx.lineTo(-s * 0.14, -s * 0.05);
+  ctx.moveTo(s * 0.14, s * 0.45);
+  ctx.lineTo(s * 0.14, -s * 0.05);
+  ctx.stroke();
+  ctx.restore();
+}
+
 /* ---------- selection wiring ---------- */
 
 attachCanvasPick('ppiScope', (id) => {
@@ -995,6 +1609,10 @@ for (const c of ['azimuthScope', 'elevationScope', 'twrScope']) {
     render();
   });
 }
+attachCanvasPick('lsoScope', (id) => {
+  state.lsoAircraftId = state.lsoAircraftId === id ? null : id;
+  render();
+});
 
 document.querySelector('#trackTable tbody').addEventListener('click', (ev) => {
   const tr = ev.target.closest('tr');
@@ -1058,9 +1676,43 @@ attachWheelZoom('elevationScope', () => state.gcaRangeNm, setGcaRange);
 attachPinchZoom('azimuthScope', () => state.gcaRangeNm, setGcaRange);
 attachPinchZoom('elevationScope', () => state.gcaRangeNm, setGcaRange);
 
+// LSO scope: 1 - 8 nm from the carrier
+function setLsoRange(v) {
+  state.lsoRangeNm = Math.min(LSO_MAX_RANGE_NM, Math.max(LSO_MIN_RANGE_NM, Math.round(v * 10) / 10));
+  render();
+}
+attachWheelZoom('lsoScope', () => state.lsoRangeNm, setLsoRange);
+attachPinchZoom('lsoScope', () => state.lsoRangeNm, setLsoRange);
+
 document.getElementById('refreshRunways').addEventListener('click', () => {
   send({ type: 'refreshRunways' });
 });
+
+/* ---------- map background toggle ---------- */
+
+function syncMapToggle() {
+  document.getElementById('mapToggle').classList.toggle('active', mapPrefs.enabled);
+}
+document.getElementById('mapToggle').addEventListener('click', () => {
+  mapPrefs.enabled = !mapPrefs.enabled;
+  localStorage.setItem('gcaMap', mapPrefs.enabled ? 'on' : 'off');
+  syncMapToggle();
+  render();
+});
+syncMapToggle();
+
+/* ---------- refresh-rate / latency HUD toggle ---------- */
+
+function syncPerfToggle() {
+  document.getElementById('perfToggle').classList.toggle('active', perfPrefs.enabled);
+  document.getElementById('latency').hidden = !perfPrefs.enabled;
+}
+document.getElementById('perfToggle').addEventListener('click', () => {
+  perfPrefs.enabled = !perfPrefs.enabled;
+  localStorage.setItem('gcaPerf', perfPrefs.enabled ? 'on' : 'off');
+  syncPerfToggle();
+});
+syncPerfToggle();
 
 /* ---------- touch: pinch zoom on scopes ---------- */
 
@@ -1121,6 +1773,8 @@ const CANVAS_ASPECTS = [
   ['elevationScope', 900 / 300],
   ['ppiScope', 1],
   ['twrScope', 900 / 640],
+  ['lsoScope', 900 / 520],
+  ['lsoPlatformScope', 900 / 300],
 ];
 
 function fitCanvases() {

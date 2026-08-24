@@ -42,6 +42,17 @@ h2 { font-size: 0.8rem; color: var(--dim); margin: 0 0 6px 0; text-transform: up
 .status { padding: 3px 10px; border-radius: 3px; font-size: 0.75rem; }
 .status.connected { color: var(--green); border: 1px solid var(--green); }
 .status.disconnected { color: var(--red); border: 1px solid var(--red); }
+.status.lat-warn { color: var(--amber); border: 1px solid var(--amber); }
+
+.controls button {
+  background: #16202a;
+  color: var(--dim);
+  border: 1px solid #2a3a4a;
+  padding: 4px 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.controls button.active { color: var(--green); border-color: var(--green); }
 
 .tabs {
   display: flex;

@@ -54,14 +54,17 @@ function wsCheck() {
       reject(new Error(`websocket: only saw ${[...seen].join(',') || 'nothing'}`));
     }, 20000);
 
+    let sentAtOk = true;
     ws.on('message', (data) => {
       const msg = JSON.parse(data.toString());
       seen.add(msg.type);
+      if (msg.type === 'tracks' && typeof msg.sentAt !== 'number') sentAtOk = false;
       if (msg.type === 'transcript' && msg.messages && msg.messages.length) seen.add('talkdown');
       if (seen.has('hello') && seen.has('runways') && seen.has('tracks') && seen.has('talkdown')) {
         clearTimeout(timer);
         ws.close();
-        resolve([...seen]);
+        if (!sentAtOk) reject(new Error('tracks message is missing the sentAt timestamp'));
+        else resolve([...seen]);
       }
     });
     ws.on('error', (err) => {
@@ -110,7 +113,7 @@ async function main() {
     }
 
     const seen = await wsCheck();
-    console.log(`SMOKE: websocket messages ok (${seen.join(', ')})`);
+    console.log(`SMOKE: websocket messages ok (${seen.join(', ')}, tracks.sentAt ok)`);
     console.log('SMOKE OK');
   } catch (err) {
     console.error('SMOKE FAIL:', err.message);

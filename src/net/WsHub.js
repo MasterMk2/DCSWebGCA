@@ -149,6 +149,7 @@ class WsHub {
         source: g.source.id,
         runway: snap.runway ? snap.runway.id : null,
         time: snap.time,
+        sentAt: Date.now(), // receive-latency display on the console
         counts: snap.counts,
         connected: g.source.client.connected,
         tracks: snap.tracks,

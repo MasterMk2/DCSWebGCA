@@ -16,6 +16,9 @@
       <label for="runwaySelect">RWY:</label>
       <select id="runwaySelect"></select>
       <button id="refreshRunways" type="button" title="ミッション/マップを変えた直後に滑走路データを取り直す">&#8635;</button>
+      <button id="mapToggle" type="button" title="レーダー画面に OpenStreetMap の地図背景を重ねる (ON/OFF)">MAP</button>
+      <button id="perfToggle" type="button" title="更新頻度 (Hz) とレイテンシ (ms) の表示を切り替える (ON/OFF)">PERF</button>
+      <span id="latency" class="status connected">UPD -- Hz | LAT -- ms</span>
       <span id="connStatus" class="status disconnected">DISCONNECTED</span>
     </div>
   </header>
@@ -30,6 +33,7 @@
     <button class="tab active" data-mode="gca">GCA (PAR)</button>
     <button class="tab" data-mode="gci">GCI (Intercept)</button>
     <button class="tab" data-mode="twr">TWR (Field)</button>
+    <button class="tab" data-mode="lso">LSO (Carrier)</button>
   </nav>
 
   <!-- ================= GCA (Precision Approach Radar) ================= -->
@@ -129,6 +133,34 @@
           </thead>
           <tbody></tbody>
         </table>
+      </section>
+    </main>
+  </section>
+
+  <!-- ================= LSO (Carrier landing aid) ================= -->
+  <section id="mode-lso" class="mode" hidden>
+    <main>
+      <section class="scope-panel">
+        <div class="gci-controls">
+          <label>CARRIER:
+            <select id="carrierSelect"><option value="">-- none --</option></select>
+          </label>
+          <label>AIRCRAFT:
+            <select id="lsoPilotSelect"><option value="">-- none --</option></select>
+          </label>
+          <span class="hint">Click a blip to designate the aircraft. Scroll to zoom.</span>
+        </div>
+        <canvas id="lsoScope" width="900" height="520"></canvas>
+      </section>
+
+      <section class="scope-panel">
+        <h2>LSO Platform View</h2>
+        <canvas id="lsoPlatformScope" width="900" height="300"></canvas>
+      </section>
+
+      <section class="table-panel">
+        <h2>Approach Data</h2>
+        <div id="lsoInfo" class="info-grid">Select a CARRIER and an AIRCRAFT.</div>
       </section>
     </main>
   </section>

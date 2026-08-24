@@ -157,7 +157,9 @@ class TrackStore {
 
     for (const t of this.tracks.values()) {
       total++;
-      if (!this.isAirborne(t)) continue;
+      // Airborne aircraft plus Sea vessels (carriers for the LSO view);
+      // everything else (ground clutter, navaids, ...) stays filtered out.
+      if (!this.isAirborne(t) && !(t.category === 'Sea' && planar(t))) continue;
 
       const altFt = t.altM !== undefined ? Math.round(t.altM / M_PER_FT) : null;
       const rec = {

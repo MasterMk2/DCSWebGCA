@@ -3,7 +3,9 @@
 /**
  * Mock Tacview real-time server for local development.
  * Emits a synthetic ACMI 2.2 stream with an aircraft flying a precision
- * approach to the first runway defined in the config.
+ * approach to the first runway defined in the config, plus a carrier (Sea
+ * track) with its own F/A-18C on a 3-degree glideslope so the LSO mode can
+ * be exercised without DCS.
  *
  * Faithful to the real protocol:
  * - XtraLib handshake reply; streaming starts only AFTER the handshake
@@ -12,7 +14,7 @@
  * - ReferenceLongitude/Latitude globals with RELATIVE lon/lat in transforms
  * - 9-field transform form including U/V meters (u = DCS z = east,
  *   v = DCS x = north)
- * - DCS-style types ("Air+FixedWing") and NO IAS/TAS properties
+ * - DCS-style types ("Air+FixedWing", "Sea+Watercraft") and NO IAS/TAS
  *
  * Usage:  node tools/mock-tacview.js   (listens on 127.0.0.1:34251)
  * Then:   TACVIEW_PORT=34251 npm start
@@ -37,6 +39,25 @@ const M_PER_FT = 0.3048;
 const EARTH_M_PER_DEG = 111320;
 const M_PER_NM = 1852;
 
+// --- Carrier scenario (LSO mode) -----------------------------------------
+// The carrier sits on the extended centreline a few miles past the field,
+// steaming into the same wind as the runway, so its recovery course equals
+// the runway heading and both approaches share one reference point.
+const CARRIER = {
+  name: 'CVN-71',
+  hdgDeg: rwy.headingDeg,
+  aheadNm: 5, // downrange of the threshold, on the centreline
+  speedMs: (12 * M_PER_NM) / 3600, // 12 kt headway: nearly stationary
+};
+const CAR_HDG_RAD = (CARRIER.hdgDeg * Math.PI) / 180;
+const CAR_SIN = Math.sin(CAR_HDG_RAD);
+const CAR_COS = Math.cos(CAR_HDG_RAD);
+// heading unit vector in (east, north); deck at sea level
+const CAR_U0 = CARRIER.aheadNm * M_PER_NM * CAR_SIN;
+const CAR_V0 = CARRIER.aheadNm * M_PER_NM * CAR_COS;
+const LSO_START_NM = 5; // initial distance astern of the carrier
+const LSO_DECK_ALT_M = 0;
+
 const REF_LAT = rwy.threshold.lat;
 const REF_LON = rwy.threshold.lon;
 const COS_REF = Math.cos((REF_LAT * Math.PI) / 180);
@@ -59,6 +80,20 @@ function positionAt(alongNm, crossNm, gsDevDeg) {
   const relLon = x / (EARTH_M_PER_DEG * COS_REF);
 
   return { relLat, relLon, altM, u: x, v: y }; // u = east, v = north
+}
+
+/** position on the carrier glideslope, `asternNm` behind the deck */
+function carrierApproachAt(asternNm, crossNm, gsDevDeg) {
+  const asternM = asternNm * M_PER_NM;
+  const crossM = crossNm * M_PER_NM;
+  const x = CAR_U0 - asternM * CAR_SIN + crossM * CAR_COS; // east
+  const y = CAR_V0 - asternM * CAR_COS - crossM * CAR_SIN; // north
+  const altM =
+    LSO_DECK_ALT_M +
+    Math.tan(((3.0 + gsDevDeg) * Math.PI) / 180) * asternM;
+  const relLat = y / EARTH_M_PER_DEG;
+  const relLon = x / (EARTH_M_PER_DEG * COS_REF);
+  return { relLat, relLon, altM, u: x, v: y };
 }
 
 function transform(p, roll, pitch, hdg) {
@@ -124,6 +159,34 @@ const server = net.createServer((socket) => {
     // Ground object at the field
     socket.write(
       `3,T=0|0|${(rwy.threshold.altFt * M_PER_FT).toFixed(1)}|0|0|${rwy.headingDeg.toFixed(1)}|0|0|${rwy.headingDeg.toFixed(1)},Name=Tower,Type=Ground+Static\n`
+    );
+
+    // Carrier: slow headway into the wind, deck at sea level
+    const carDist = CARRIER.speedMs * t;
+    const cu = CAR_U0 + carDist * CAR_SIN;
+    const cv = CAR_V0 + carDist * CAR_COS;
+    socket.write(
+      `4,T=${(cu / (EARTH_M_PER_DEG * COS_REF)).toFixed(7)}|${(cv / EARTH_M_PER_DEG).toFixed(7)}|${LSO_DECK_ALT_M.toFixed(1)}|0|0|${CARRIER.hdgDeg.toFixed(1)}|${cu.toFixed(1)}|${cv.toFixed(1)}|${CARRIER.hdgDeg.toFixed(1)},Type=Sea+Watercraft,Name=${CARRIER.name}\n`
+    );
+
+    // Carrier approach aircraft: realistic recovery cycle with no teleport —
+    // inbound on the 3-degree glideslope from 5 nm astern to the deck
+    // (2 nm per minute), then outbound straight back out along the same line
+    // and re-enter for another pass.
+    const LSO_LEG_S = (LSO_START_NM / 2) * 60; // seconds per leg at 2 nm/min
+    const cPhase = t % (2 * LSO_LEG_S);
+    const outbound = cPhase >= LSO_LEG_S;
+    const legT = outbound ? cPhase - LSO_LEG_S : cPhase;
+    const asternNm = outbound
+      ? (legT / 60) * 2 // climb back out astern of the deck
+      : LSO_START_NM - (legT / 60) * 2; // ride the slope down to the deck
+    const cCross = 0.08 * Math.sin(t / 70);
+    const cGsDev = 0.3 * Math.sin(t / 110);
+    const cp = carrierApproachAt(asternNm, cCross, cGsDev);
+    const cHdg =
+      CARRIER.hdgDeg + (outbound ? 180 : 0) + (cCross > 0 ? -2 : 2);
+    socket.write(
+      `5,${transform(cp, 0, 8, cHdg)},Type=Air+FixedWing,Name=F/A-18C,Pilot=Rag-1\n`
     );
   }
 

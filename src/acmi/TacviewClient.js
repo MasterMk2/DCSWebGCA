@@ -108,6 +108,7 @@ class TacviewClient extends EventEmitter {
         if (nul < 0) return; // still reading the host handshake
         clearTimeout(handshakeTimer);
         const hello = this.buffer.slice(0, nul).split('\n');
+        if (this.diagnostics) this.diagnostics.recordHandshake(this.buffer.slice(0, nul));
         this.handshakeDone = true;
         this.connected = true;
         this.buffer = this.buffer.slice(nul + 1);

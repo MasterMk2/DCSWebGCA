@@ -7,6 +7,7 @@
  *   GET /api/runways?source=         runway definitions of one server
  *   GET /api/state?source=&runway=   current snapshot (REST fallback / probing)
  *   GET /api/health                  per-source stream health (ops)
+ *   GET /api/diagnostics             Tacview protocol evidence (TACVIEW_DEBUG=1)
  *
  * All asset references in public/ are relative, so the console can be mounted
  * at the site root or behind a reverse-proxy sub-path (e.g. /gca/).
@@ -83,6 +84,16 @@ function createServer(cfg, sources) {
         const ok = list.some((s) => s.connected);
         return json(res, { ok, sources: list }, ok ? 200 : 503);
       }
+
+      // Protocol diagnostics (Issue #8): only populated when the server runs
+      // with TACVIEW_DEBUG=1; otherwise reports enabled:false per source.
+      case '/api/diagnostics':
+        return json(res, {
+          enabled: [...sources.values()].some((s) => s.diagnostics),
+          sources: [...sources.values()].map((s) =>
+            s.diagnostics ? Object.assign({ id: s.id, name: s.name }, s.diagnostics.report()) : { id: s.id, name: s.name, enabled: false }
+          ),
+        });
 
       default:
         return serveStatic(url.pathname, res);

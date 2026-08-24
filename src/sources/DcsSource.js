@@ -12,9 +12,11 @@ const { TacviewClient } = require('../acmi/TacviewClient');
 const { TrackStore } = require('../acmi/TrackStore');
 const { Talkdown } = require('../acmi/Talkdown');
 const { RunwayProvider } = require('../runways/RunwayProvider');
+const { Diagnostics } = require('../acmi/Diagnostics');
 
 const TRANSCRIPT_KEEP = 100;
 const MISSION_REFRESH_DELAY_MS = 15000;
+const DIAGNOSTICS_DUMP_INTERVAL_MS = 5000;
 
 class DcsSource {
   constructor(cfg, srcCfg) {
@@ -27,6 +29,20 @@ class DcsSource {
     this.runwayProvider = new RunwayProvider(cfg, srcCfg);
     this.talkdowns = new Map(); // runwayId -> { talkdown, transcript }
     this.client = new TacviewClient(srcCfg.tacview, srcCfg.id);
+
+    // Protocol diagnostics (Issue #8): only wired up when TACVIEW_DEBUG is on,
+    // so the normal pipeline pays nothing for it.
+    this.diagnostics = cfg.debug && cfg.debug.enabled ? new Diagnostics({ dumpPath: cfg.debug.dumpPath }) : null;
+    if (this.diagnostics) {
+      this.client.diagnostics = this.diagnostics;
+      this.client.parser.transformObserver = (n) => this.diagnostics.recordTransform(n);
+      this.client.on('global', (k, v) => this.diagnostics.recordGlobal(k, v));
+      this.client.on('update', (u) => this.diagnostics.recordUpdate(u.id, u.props));
+      if (this.diagnostics.dumpPath) {
+        this.diagTimer = setInterval(() => this.diagnostics.maybeDump(), DIAGNOSTICS_DUMP_INTERVAL_MS);
+      }
+      console.log(`[${this.id}] protocol diagnostics enabled${this.diagnostics.dumpPath ? ` (dump: ${this.diagnostics.dumpPath})` : ''}`);
+    }
 
     this.client.on('update', (u) => this.store.applyUpdate(u));
     this.client.on('remove', (id) => this.store.remove(id));
@@ -50,6 +66,8 @@ class DcsSource {
 
   stop() {
     clearTimeout(this.refreshTimer);
+    clearInterval(this.diagTimer);
+    if (this.diagnostics) this.diagnostics.maybeDump(true);
     this.client.stop();
   }
 

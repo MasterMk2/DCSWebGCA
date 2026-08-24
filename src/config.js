@@ -76,6 +76,15 @@ function load() {
   if (process.env.DCSSB_API_PREFIX) cfg.dcssb.prefix = process.env.DCSSB_API_PREFIX;
   if (process.env.DCSSB_API_KEY) cfg.dcssb.apiKey = process.env.DCSSB_API_KEY;
 
+  // Protocol diagnostics (Issue #8 field verification). Off by default; when
+  // enabled the Tacview pipeline aggregates handshake/reference/transform/
+  // Type/u-v/ground-speed evidence, served on /api/diagnostics and dumped to
+  // TACVIEW_DEBUG_DUMP (signals are not portable on Windows).
+  cfg.debug = {
+    enabled: process.env.TACVIEW_DEBUG === '1' || process.env.TACVIEW_DEBUG === 'true',
+    dumpPath: process.env.TACVIEW_DEBUG_DUMP || null,
+  };
+
   // Dev convenience: point the first source at a mock/other host.
   const first = cfg.sources[0];
   if (process.env.TACVIEW_HOST) first.tacview.host = process.env.TACVIEW_HOST;

@@ -44,6 +44,9 @@ class AcmiParser extends EventEmitter {
     this.global = {};
     this.reference = { lat: 0, lon: 0 };
     this.pending = null; // partial line held back by a trailing escape
+    // Optional protocol-diagnostics hook (Issue #8): set to a callback that
+    // receives the raw transform field count. Null = zero overhead.
+    this.transformObserver = null;
   }
 
   reset() {
@@ -119,6 +122,7 @@ class AcmiParser extends EventEmitter {
   applyTransform(props, val) {
     const raw = val.split('|');
     const n = raw.length;
+    if (this.transformObserver) this.transformObserver(n, props);
     let keys;
     if (n <= 3) keys = ['lonRel', 'latRel', 'altM'];
     else if (n <= 5) keys = ['lonRel', 'latRel', 'altM', 'u', 'v'];

@@ -6,6 +6,8 @@ const assert = require('node:assert');
 const { AcmiParser } = require('../src/acmi/AcmiParser');
 const { TrackStore } = require('../src/acmi/TrackStore');
 const { Talkdown } = require('../src/acmi/Talkdown');
+const { Diagnostics } = require('../src/acmi/Diagnostics');
+const { parseClientHandshake, authorizeClient } = require('../tools/mock-tacview');
 
 /* ---------- AcmiParser ---------- */
 // Wire format (real DCS Tacview export):
@@ -337,4 +339,106 @@ test('Talkdown: only aircraft established on final are talked down', () => {
   assert.strictEqual(td.update([parked], 'RWY 21').length, 0, 'aircraft on the ground stay silent');
 
   assert.strictEqual(td.update([fakeTrack(5, 0.1, 0.1)], 'RWY 21').length, 1);
+});
+
+/* ---------- Diagnostics (Issue #8 observation mode) ---------- */
+
+test('Diagnostics: reference, transform histogram and Type counts are aggregated', () => {
+  const diag = new Diagnostics();
+  diag.recordGlobal('ReferenceLongitude', '140.0');
+  diag.recordGlobal('ReferenceLatitude', '36');
+  diag.recordGlobal('Title', 'unrelated'); // must be ignored
+  for (let i = 0; i < 3; i++) diag.recordTransform(9);
+  diag.recordTransform(3);
+  diag.recordUpdate('a', { Type: 'Air+FixedWing' });
+  diag.recordUpdate('b', { Type: 'Air+FixedWing' });
+  diag.recordUpdate('c', { Type: 'Sea+Watercraft' });
+
+  const rep = diag.report();
+  assert.deepStrictEqual(rep.reference.declared, { ReferenceLongitude: true, ReferenceLatitude: true });
+  assert.strictEqual(rep.reference.longitude, 140.0);
+  assert.strictEqual(rep.reference.latitude, 36);
+  assert.deepStrictEqual(rep.transforms.histogram, { 9: 3, 3: 1 });
+  assert.strictEqual(rep.transforms.total, 4);
+  assert.strictEqual(rep.types.counts['Air+FixedWing'], 2);
+  assert.strictEqual(rep.types.counts['Sea+Watercraft'], 1);
+  assert.strictEqual(rep.types.total, 3);
+});
+
+test('Diagnostics: uv samples keep raw relative + absolute + native coordinates', () => {
+  const diag = new Diagnostics({ maxUvTracks: 2 });
+  diag.recordUpdate('1', { lonRel: 4.73, latRel: 3.57, lon: 144.73, lat: 39.57, u: 545654, v: -366511.31, Type: 'Air+FixedWing' });
+  diag.recordUpdate('2', { lonRel: 0.1, latRel: 0.2, lon: 140.1, lat: 36.2 }); // no u/v on the wire
+  diag.recordUpdate('1', { u: 1, v: 2 }); // repeat update must not add a second sample
+  diag.recordUpdate('3', { lonRel: 9, latRel: 9, lon: 149, lat: 45 }); // beyond maxUvTracks
+
+  assert.strictEqual(diag.uvSamples.length, 2);
+  const s = diag.uvSamples[0];
+  assert.strictEqual(s.id, '1');
+  assert.strictEqual(s.lonRel, 4.73); // raw as sent by the host
+  assert.strictEqual(s.latRel, 3.57);
+  assert.strictEqual(s.lon, 144.73); // after Reference* was applied
+  assert.strictEqual(s.lat, 39.57);
+  assert.strictEqual(s.u, 545654); // native DCS metres
+  assert.strictEqual(s.v, -366511.31);
+  assert.strictEqual(diag.uvSamples[1].u, null);
+});
+
+test('Diagnostics: ground speed differencing count and mean', async () => {
+  const diag = new Diagnostics();
+  diag.recordUpdate('a', { u: 0, v: 0 });
+  await new Promise((r) => setTimeout(r, 550));
+  // move north-east at ~77 m/s over the elapsed wall-clock dt
+  diag.recordUpdate('a', { u: 38.5, v: 66.7 });
+
+  const gs = diag.report().groundSpeed;
+  assert.strictEqual(gs.samples, 1);
+  assert.ok(gs.meanMs > 50 && gs.meanMs < 200, `meanMs=${gs.meanMs}`);
+  assert.ok(gs.meanKt > 100 && gs.meanKt < 400, `meanKt=${gs.meanKt}`);
+
+  // pairs closer than MIN_DT_S are ignored, so no second sample yet
+  diag.recordUpdate('a', { u: 40, v: 70 });
+  assert.strictEqual(diag.report().groundSpeed.samples, 1);
+});
+
+test('Diagnostics: maybeDump writes JSON to TACVIEW_DEBUG_DUMP path', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const file = path.join(os.tmpdir(), `gca-diag-test-${process.pid}.json`);
+  try {
+    const diag = new Diagnostics({ dumpPath: file });
+    diag.recordGlobal('ReferenceLatitude', '38');
+    assert.ok(diag.maybeDump(true), 'dump should write when forced');
+    const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.strictEqual(written.reference.latitude, 38);
+    assert.strictEqual(written.enabled, true);
+
+    // unchanged state is not rewritten without force
+    assert.strictEqual(diag.maybeDump(false), false);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});
+
+/* ---------- mock Tacview host handshake / password gate ---------- */
+
+test('mock handshake: parses the four XtraLib lines and gates the password', () => {
+  const hs = parseClientHandshake('XtraLib.Stream.0\nTacview.RealTimeTelemetry.0\nDCSWebGCA\nsecret\0');
+  assert.strictEqual(hs.proto, 'XtraLib.Stream.0');
+  assert.strictEqual(hs.stream, 'Tacview.RealTimeTelemetry.0');
+  assert.strictEqual(hs.name, 'DCSWebGCA');
+  assert.strictEqual(hs.password, 'secret');
+
+  // correct password passes, wrong one is rejected
+  assert.strictEqual(authorizeClient(hs, 'secret').ok, true);
+  assert.strictEqual(authorizeClient(hs, 'other').ok, false);
+
+  // open host accepts everybody regardless of what the client sent
+  assert.strictEqual(authorizeClient(hs, '').ok, true);
+
+  // client that never sends a password line against a protected host
+  const bare = parseClientHandshake('XtraLib.Stream.0\nTacview.RealTimeTelemetry.0\nDCSWebGCA\0');
+  assert.strictEqual(bare.password, '');
+  assert.strictEqual(authorizeClient(bare, 'secret').ok, false);
 });

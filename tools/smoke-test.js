@@ -80,7 +80,12 @@ async function main() {
     stdio: 'inherit',
   });
   const server = spawn(process.execPath, ['src/index.js'], {
-    env: { ...process.env, TACVIEW_PORT: String(MOCK_PORT), GCA_PORT: String(WEB_PORT) },
+    env: {
+      ...process.env,
+      TACVIEW_PORT: String(MOCK_PORT),
+      GCA_PORT: String(WEB_PORT),
+      TACVIEW_DEBUG: '1', // exercise the /api/diagnostics endpoint below
+    },
     stdio: 'inherit',
   });
 
@@ -93,6 +98,20 @@ async function main() {
     await new Promise((r) => setTimeout(r, 1500));
     const res2 = await get('/api/state');
     state = JSON.parse(res2.body);
+
+    // light check that the protocol-diagnostics endpoint is alive and fed
+    const diagRes = await get('/api/diagnostics');
+    if (diagRes.status !== 200) throw new Error(`diagnostics endpoint returned ${diagRes.status}`);
+    const diag = JSON.parse(diagRes.body);
+    if (!diag.enabled || !diag.sources[0] || diag.sources[0].enabled === false) {
+      throw new Error('diagnostics not enabled despite TACVIEW_DEBUG=1');
+    }
+    const d0 = diag.sources[0];
+    if (!Object.keys(d0.types.counts).length) throw new Error('diagnostics saw no Type strings');
+    console.log(
+      `SMOKE: diagnostics ok (transforms ${JSON.stringify(d0.transforms.histogram)}, ` +
+        `types ${d0.types.distinct} distinct, gs samples ${d0.groundSpeed.samples})`
+    );
 
     let speedOk = true;
     const airborne = state.tracks.filter((t) => t.approach);

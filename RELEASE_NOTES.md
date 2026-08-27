@@ -1,5 +1,47 @@
 # Release Notes
 
+## v0.6.0 (2026-08-27)
+
+### Added
+
+- **GCI scope panning**: the PPI can be dragged with the mouse (or one finger)
+  to look away from the airfield. The offset is kept in metres, so zooming and
+  window resizes leave the same piece of ground in the middle of the scope, and
+  the map background, range rings, runway and tracks all move together. A
+  **CENTER** button recentres on the runway threshold, and the pan resets by
+  itself when the runway or the server is switched. A drag that actually moved
+  swallows the click that ends it, so panning never designates a TARGET by
+  accident.
+- **Cursor bullseye readout**: the GCI control bar shows the bullseye bearing
+  and range of whatever the pointer is over (`BULLS(Blue) 274/032`, true
+  bearing / nm), and the bullseye itself is drawn on the scope. When the
+  mission exports one bullseye per coalition, a **BULLS** selector picks which
+  reference the readout uses; the label always names it, so the enemy reference
+  cannot be read off by mistake.
+- **Bullseye tracking** (server): `Type=Navaid+Static+Bullseye` objects are
+  kept per coalition and shipped with every `tracks` frame. The stream sends
+  them once, with the initial world state, so they are held in their own map
+  that `staleAfterSec` pruning never touches and only a stream restart clears.
+  Bearing/range is computed in native DCS metres when both the bullseye and the
+  runway carry them (exact, matching what the pilot's aircraft computes), and
+  otherwise from lat/lon with the scale taken at the midpoint latitude — a
+  bullseye is often 50+ nm out, far enough for the threshold's own cos(lat) to
+  be several nm wrong at high latitudes.
+- **Console build marker**: the browser logs `[gca] console build <id>` at
+  start-up, so "the new feature is missing" can be told apart from "this
+  browser is still running a cached copy" at a glance.
+- **Mock bullseyes**: `tools/mock-tacview.js` streams two static bullseyes
+  (Blue 25 nm north, Red 40 nm south of the threshold) once with the initial
+  world state, exactly as the real host does, so the readout and the
+  non-pruning path can be exercised without DCS.
+
+### Tests
+
+- 2 new unit tests (21 total): bullseyes stay out of the track list, survive
+  pruning past `staleAfterSec`, and are cleared by `clear()` / removal lines.
+- The smoke test now asserts that both mock bullseyes reach `GET /api/state`
+  and every WebSocket `tracks` frame, and that no navaid leaks into the tracks.
+
 ## v0.5.0 (2026-08-24)
 
 ### Added

@@ -5,7 +5,8 @@
  * Emits a synthetic ACMI 2.2 stream with an aircraft flying a precision
  * approach to the first runway defined in the config, plus a carrier (Sea
  * track) with its own F/A-18C on a 3-degree glideslope so the LSO mode can
- * be exercised without DCS.
+ * be exercised without DCS. Two static bullseyes (one per coalition) are sent
+ * once with the initial world state, as the real host does.
  *
  * Faithful to the real protocol:
  * - XtraLib handshake reply; streaming starts only AFTER the handshake
@@ -102,6 +103,14 @@ function carrierApproachAt(asternNm, crossNm, gsDevDeg) {
   return { relLat, relLon, altM, u: x, v: y };
 }
 
+/** static reference point `distNm` from the threshold on true bearing `brgDeg` */
+function referencePoint(brgDeg, distNm) {
+  const r = (brgDeg * Math.PI) / 180;
+  const x = distNm * M_PER_NM * Math.sin(r); // east
+  const y = distNm * M_PER_NM * Math.cos(r); // north
+  return { relLat: y / EARTH_M_PER_DEG, relLon: x / (EARTH_M_PER_DEG * COS_REF), altM: 0, u: x, v: y };
+}
+
 function transform(p, roll, pitch, hdg) {
   // transform sub-fields are PIPE separated on the wire
   return `T=${p.relLon.toFixed(7)}|${p.relLat.toFixed(7)}|${p.altM.toFixed(1)}|${roll}|${pitch}|${hdg.toFixed(1)}|${p.u.toFixed(1)}|${p.v.toFixed(1)}|${hdg.toFixed(1)}`;
@@ -169,6 +178,16 @@ function main() {
       socket.write(`0,ReferenceLatitude=${REF_LAT}\n`);
       socket.write('0,ReferenceTime=2026-01-01T00:00:00Z\n');
       socket.write('0,DataSource=DCS Web GCA mock\n');
+
+      // Bullseyes: one static reference point per coalition. Like the real
+      // host, they go out once with the initial world state and are never
+      // repeated, so the console has to remember them.
+      socket.write(
+        `90,${transform(referencePoint(0, 25), 0, 0, 0)},Type=Navaid+Static+Bullseye,Name=Bullseye,Color=Blue,Coalition=Allies\n`
+      );
+      socket.write(
+        `91,${transform(referencePoint(180, 40), 0, 0, 0)},Type=Navaid+Static+Bullseye,Name=Bullseye,Color=Red,Coalition=Enemies\n`
+      );
 
       timer = setInterval(streamFrame, 100);
     }

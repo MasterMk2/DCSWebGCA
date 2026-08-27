@@ -22,6 +22,11 @@ class TrackStore {
     this.cfg = cfg;
     this.label = label;
     this.tracks = new Map();
+    // Bullseyes are static objects: the stream sends them once, at the start,
+    // and never again. Keeping them in `tracks` would let prune() drop them
+    // after staleAfterSec, so they live in their own never-pruned map and are
+    // only cleared when the recording restarts.
+    this.bullseyes = new Map();
     // config.load() fills these in, but the store is also constructed directly
     // (tests, embedders), so never depend on them being present.
     const gca = (cfg && cfg.gca) || {};
@@ -34,6 +39,7 @@ class TrackStore {
 
   clear() {
     this.tracks.clear();
+    this.bullseyes.clear();
   }
 
   applyUpdate({ id, props }) {
@@ -46,6 +52,7 @@ class TrackStore {
 
     Object.assign(t, props);
     if (props.Type !== undefined) t.category = categorize(props.Type);
+    if (isBullseye(t.Type)) this.bullseyes.set(id, bullseyeRecord(id, t));
 
     // Velocity is differentiated against a reference sample that is only
     // replaced once enough time has passed. Comparing against the *previous*
@@ -76,6 +83,7 @@ class TrackStore {
 
   remove(id) {
     this.tracks.delete(id);
+    this.bullseyes.delete(id);
   }
 
   prune() {
@@ -196,6 +204,9 @@ class TrackStore {
       time: Date.now(),
       runway: rwy || null,
       tracks,
+      // Reference points, not traffic: the console reads cursor position
+      // against them, they never appear in the track list.
+      bullseyes: [...this.bullseyes.values()],
       counts: { aircraft: tracks.length, objects: total },
     };
   }
@@ -247,6 +258,25 @@ function categorize(type) {
   return 'Other';
 }
 
+/** DCS exports one bullseye per coalition, tagged 'Navaid+Static+Bullseye' */
+function isBullseye(type) {
+  return String(type || '').split('+').includes('Bullseye');
+}
+
+/** flat copy of the bits the console needs, in both coordinate frames */
+function bullseyeRecord(id, t) {
+  return {
+    id,
+    name: t.Name || 'Bullseye',
+    coalition: t.Coalition || '',
+    color: t.Color || '',
+    lat: t.lat,
+    lon: t.lon,
+    u: t.u,
+    v: t.v,
+  };
+}
+
 function guidanceText(azDev, gsDev, azTol, gsTol) {
   if (gsDev === null) return '';
   const parts = [];
@@ -255,4 +285,4 @@ function guidanceText(azDev, gsDev, azTol, gsTol) {
   return parts.join(' / ');
 }
 
-module.exports = { TrackStore, categorize };
+module.exports = { TrackStore, categorize, isBullseye };

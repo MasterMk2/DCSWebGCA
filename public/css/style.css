@@ -117,7 +117,24 @@ td.guidance-warn { color: var(--amber); }
   font-family: inherit;
 }
 
+.gci-controls button {
+  background: #16202a;
+  color: var(--dim);
+  border: 1px solid #2a3a4a;
+  padding: 3px 10px;
+  font-family: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
 .gci-controls .hint { color: var(--dim); font-size: 0.75rem; }
+
+/* bullseye position of the pointer; pushed to the right so the hint text
+   beside it does not shuffle as the digits change */
+.gci-controls .cursor-readout { margin-left: auto; color: var(--amber); white-space: nowrap; }
+
+/* the PPI is dragged, so a finger on it must pan the scope, not scroll the page */
+#ppiScope { touch-action: none; }
 
 .info-grid {
   display: grid;

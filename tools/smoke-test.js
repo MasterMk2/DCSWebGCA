@@ -55,15 +55,20 @@ function wsCheck() {
     }, 20000);
 
     let sentAtOk = true;
+    let bullseyeOk = true;
     ws.on('message', (data) => {
       const msg = JSON.parse(data.toString());
       seen.add(msg.type);
       if (msg.type === 'tracks' && typeof msg.sentAt !== 'number') sentAtOk = false;
+      // the bullseyes are streamed once, before the first frame: every tracks
+      // message must still carry them
+      if (msg.type === 'tracks' && (!msg.bullseyes || msg.bullseyes.length !== 2)) bullseyeOk = false;
       if (msg.type === 'transcript' && msg.messages && msg.messages.length) seen.add('talkdown');
       if (seen.has('hello') && seen.has('runways') && seen.has('tracks') && seen.has('talkdown')) {
         clearTimeout(timer);
         ws.close();
         if (!sentAtOk) reject(new Error('tracks message is missing the sentAt timestamp'));
+        else if (!bullseyeOk) reject(new Error('tracks message is missing the two mock bullseyes'));
         else resolve([...seen]);
       }
     });
@@ -117,6 +122,11 @@ async function main() {
     const airborne = state.tracks.filter((t) => t.approach);
     if (airborne.length === 0) throw new Error('tracks have no approach data (runway not resolved?)');
     if (state.tracks.some((t) => t.category === 'Ground')) throw new Error('ground clutter leaked into the console');
+    if (state.tracks.some((t) => t.category === 'Navaid')) throw new Error('a navaid leaked into the track list');
+    if (!state.bullseyes || state.bullseyes.length !== 2) {
+      throw new Error(`expected the two mock bullseyes, got ${JSON.stringify(state.bullseyes)}`);
+    }
+    console.log(`SMOKE: bullseyes ${state.bullseyes.map((b) => b.color || b.coalition || b.name).join(', ')}`);
 
     console.log(`SMOKE: ${state.tracks.length} tracks (${state.counts.objects} objects), runway ${state.runway.id}`);
     for (const t of airborne) {

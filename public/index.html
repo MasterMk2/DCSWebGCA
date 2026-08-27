@@ -97,7 +97,12 @@
               <option value="80">80 nm</option>
             </select>
           </label>
-          <span class="hint">Click a blip to designate TARGET. Scroll to zoom.</span>
+          <label id="bullseyeLabel" hidden>BULLS:
+            <select id="bullseyeSelect"></select>
+          </label>
+          <button id="gciCenter" type="button" title="スコープの中心を滑走路しきい値に戻す">CENTER</button>
+          <span class="hint">Click a blip to designate TARGET. Drag to pan, scroll to zoom.</span>
+          <span id="gciCursor" class="hint cursor-readout">BULLS --</span>
         </div>
         <canvas id="ppiScope" width="820" height="820"></canvas>
       </section>

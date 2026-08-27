@@ -328,6 +328,46 @@ test('TrackStore: ground clutter and weapons never reach the console', () => {
   assert.strictEqual(snap.counts.aircraft, 2);
 });
 
+test('TrackStore: bullseyes are kept out of the track list but exposed separately', () => {
+  const store = makeStore();
+  store.applyUpdate({
+    id: '90',
+    props: { Type: 'Navaid+Static+Bullseye', Name: 'Bullseye', Color: 'Blue', Coalition: 'Allies', lat: 36.4, lon: 140.2, u: 1000, v: 2000 },
+  });
+  store.applyUpdate({ id: '1', props: { Type: 'Air+FixedWing', lat: 36, lon: 140, altM: 1000 } });
+
+  const snap = store.snapshot(null);
+  assert.deepStrictEqual(snap.tracks.map((t) => t.id), ['1'], 'a bullseye is not traffic');
+  assert.strictEqual(snap.bullseyes.length, 1);
+  assert.deepStrictEqual(snap.bullseyes[0], {
+    id: '90',
+    name: 'Bullseye',
+    coalition: 'Allies',
+    color: 'Blue',
+    lat: 36.4,
+    lon: 140.2,
+    u: 1000,
+    v: 2000,
+  });
+});
+
+test('TrackStore: a bullseye sent once survives pruning, clear() drops it', () => {
+  const store = makeStore();
+  store.applyUpdate({ id: '90', props: { Type: 'Navaid+Static+Bullseye', lat: 36.4, lon: 140.2 } });
+
+  // the stream sends static objects once: age the record well past staleAfterSec
+  store.tracks.get('90').lastUpdate = Date.now() - 60 * 1000;
+  assert.strictEqual(store.snapshot(null).bullseyes.length, 1, 'must outlive prune()');
+  assert.strictEqual(store.tracks.has('90'), false, 'the track record itself is pruned as usual');
+
+  store.applyUpdate({ id: '91', props: { Type: 'Navaid+Static+Bullseye', lat: 36.5, lon: 140.3 } });
+  store.remove('91');
+  assert.strictEqual(store.snapshot(null).bullseyes.length, 1, 'removal line drops it');
+
+  store.clear(); // recording restart / stream drop
+  assert.strictEqual(store.snapshot(null).bullseyes.length, 0);
+});
+
 test('Talkdown: only aircraft established on final are talked down', () => {
   const td = makeTalkdown();
   const far = fakeTrack(80, 20, 5);

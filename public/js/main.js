@@ -14,6 +14,12 @@
 
 const M_PER_NM = 1852;
 const KT_TO_MS = 0.514444;
+const EARTH_M_PER_DEG = 111320;
+
+/* Bumped whenever the console changes in a way a stale cached copy would
+ * hide; logged at start-up so "it does not do the new thing" can be told
+ * apart from "the browser is still on yesterday's file". */
+const CLIENT_BUILD = '2026-08-27 gci-pan+bullseye';
 
 /* The console may be mounted at the site root or behind a sub-path
  * (https://freedomflight.jp/gca/), so every URL is built relative to the
@@ -36,11 +42,17 @@ const state = {
   runways: [],
   runwayId: null,
   tracks: [],
+  bullseyes: [],    // mission reference points, one per coalition
   counts: null,
   connected: false,
   selectedId: null, // GCA table selection
   targetId: null,   // GCI target
   ownshipId: null,  // GCI ownship
+  bullseyeId: null, // GCI bullseye the cursor readout measures from
+  /* GCI scope centre, in metres east/north of the runway threshold. Panned by
+   * dragging the PPI; metres (not pixels) so zooming and canvas resizes keep
+   * the same piece of ground under the middle of the scope. */
+  gciPan: { x: 0, y: 0 },
   carrierId: null,     // LSO carrier (Sea track)
   lsoAircraftId: null, // LSO aircraft being talked onto the deck
   gciRangeNm: 20,
@@ -139,6 +151,9 @@ function connectWs() {
       case 'runways':
         if (msg.source !== state.sourceId) break;
         state.runways = msg.runways || [];
+        // the PPI is centred on the threshold, so a different runway must not
+        // inherit the pan of the old one (the new field would be off-screen)
+        if (state.runwayId !== msg.runway) resetGciPan();
         state.runwayId = msg.runway;
         populateRunwaySelect();
         updateInfoBar();
@@ -148,6 +163,7 @@ function connectWs() {
       case 'tracks':
         if (msg.source !== state.sourceId) break;
         state.tracks = msg.tracks;
+        state.bullseyes = msg.bullseyes || [];
         state.counts = msg.counts;
         state.streaming = msg.connected;
         if (msg.runway) state.runwayId = msg.runway;
@@ -264,8 +280,10 @@ function populateSourceSelect() {
   sel.onchange = () => {
     state.sourceId = sel.value;
     state.tracks = [];
+    state.bullseyes = [];
     state.runways = [];
-    state.selectedId = state.targetId = state.ownshipId = null;
+    state.selectedId = state.targetId = state.ownshipId = state.bullseyeId = null;
+    resetGciPan();
     send({ type: 'subscribe', source: sel.value });
   };
 }
@@ -345,6 +363,8 @@ function render() {
 
 function pruneSelections() {
   const ids = new Set(state.tracks.map((t) => t.id));
+  const bulls = new Set(state.bullseyes.map((b) => b.id));
+  if (state.bullseyeId && !bulls.has(state.bullseyeId)) state.bullseyeId = null;
   if (state.selectedId && !ids.has(state.selectedId)) state.selectedId = null;
   if (state.targetId && !ids.has(state.targetId)) state.targetId = null;
   if (state.ownshipId && !ids.has(state.ownshipId)) state.ownshipId = null;
@@ -360,9 +380,14 @@ function registerBlip(canvasId, id, x, y) {
   blipIndex[canvasId].push({ id, x, y });
 }
 
+/* Canvas ids whose next click is the tail end of a drag and must not be taken
+ * as a designation. Set by attachCanvasPan, consumed by attachCanvasPick. */
+const dragSuppressClick = new Set();
+
 function attachCanvasPick(canvasId, onPick) {
   const canvas = document.getElementById(canvasId);
   canvas.addEventListener('click', (ev) => {
+    if (dragSuppressClick.delete(canvasId)) return;
     const rect = canvas.getBoundingClientRect();
     const px = (ev.clientX - rect.left) * (canvas.width / rect.width);
     const py = (ev.clientY - rect.top) * (canvas.height / rect.height);
@@ -738,6 +763,14 @@ const mapPrefs = { enabled: localStorage.getItem('gcaMap') !== 'off' };
 const tileCache = new Map(); // url -> { img, ready, failed }
 let mapRenderQueued = false;
 
+/** move a lat/lon by (east, north) metres — the flat frame the scopes draw in */
+function offsetLatLon(ref, eastM, northM) {
+  return {
+    lat: ref.lat + northM / EARTH_M_PER_DEG,
+    lon: ref.lon + eastM / (EARTH_M_PER_DEG * Math.cos((ref.lat * Math.PI) / 180)),
+  };
+}
+
 function lonToTileX(lon, z) {
   return ((lon + 180) / 360) * Math.pow(2, z);
 }
@@ -775,9 +808,14 @@ function scheduleMapRender() {
   });
 }
 
-/** dim OSM raster under a north-up scope centred on `ref` (threshold lat/lon) */
-function drawMapBackground(ctx, W, H, ref, mPerPx) {
+/**
+ * Dim OSM raster under a north-up scope centred on `ref` (threshold lat/lon).
+ * `pan` (metres east/north) shifts the centre for scopes that can be dragged,
+ * so the map moves with the tracks instead of staying pinned to the field.
+ */
+function drawMapBackground(ctx, W, H, ref, mPerPx, pan) {
   if (!mapPrefs.enabled || !ref || ref.lat === undefined || ref.lon === undefined) return;
+  if (pan && (pan.x || pan.y)) ref = offsetLatLon(ref, pan.x, pan.y);
 
   const latRad = (ref.lat * Math.PI) / 180;
   const zoom = Math.max(
@@ -825,6 +863,7 @@ function drawMapBackground(ctx, W, H, ref, mPerPx) {
 function renderGci() {
   drawPpi();
   updateOwnshipSelect();
+  updateBullseyeSelect();
   updateInterceptInfo();
 }
 
@@ -839,36 +878,43 @@ function drawPpi() {
   if (!rwy) return;
   const cx = W / 2, cy = H / 2;
   const radius = Math.min(W, H) / 2 - 40;
-  const mPerPx = (state.gciRangeNm * M_PER_NM) / radius;
+  const mPerPx = ppiMPerPx(canvas);
 
-  const sx = (x) => cx + x / mPerPx;
-  const sy = (y) => cy - y / mPerPx;
+  // The scope centre is the threshold plus the drag offset, so everything —
+  // rings, runway, map and tracks — shifts together.
+  const pan = state.gciPan;
+  const sx = (x) => cx + (x - pan.x) / mPerPx;
+  const sy = (y) => cy - (y - pan.y) / mPerPx;
 
-  drawMapBackground(ctx, W, H, rwy.threshold, mPerPx);
+  drawMapBackground(ctx, W, H, rwy.threshold, mPerPx, pan);
 
+  // range rings stay centred on the radar site (the threshold), which is where
+  // their labels are measured from, and travel off-centre as the view is panned
+  const ox = sx(0), oy = sy(0);
   ctx.strokeStyle = '#14202b';
   ctx.fillStyle = '#5a6b7a';
   ctx.font = '11px Consolas, monospace';
   const step = state.gciRangeNm / 4;
   for (let r = step; r <= state.gciRangeNm + 0.01; r += step) {
     ctx.beginPath();
-    ctx.arc(cx, cy, (r * M_PER_NM) / mPerPx, 0, Math.PI * 2);
+    ctx.arc(ox, oy, (r * M_PER_NM) / mPerPx, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillText(r.toFixed(0), cx + 4, cy - (r * M_PER_NM) / mPerPx - 3);
+    ctx.fillText(r.toFixed(0), ox + 4, oy - (r * M_PER_NM) / mPerPx - 3);
   }
   ctx.beginPath();
-  ctx.moveTo(cx - radius, cy);
-  ctx.lineTo(cx + radius, cy);
-  ctx.moveTo(cx, cy - radius);
-  ctx.lineTo(cx, cy + radius);
+  ctx.moveTo(0, oy);
+  ctx.lineTo(W, oy);
+  ctx.moveTo(ox, 0);
+  ctx.lineTo(ox, H);
   ctx.stroke();
 
+  // north-up, so the compass letters belong to the canvas edges, not the site
   ctx.fillStyle = '#5a6b7a';
   ctx.font = '13px Consolas, monospace';
-  ctx.fillText('N', cx - 4, cy - radius - 8);
-  ctx.fillText('S', cx - 4, cy + radius + 16);
-  ctx.fillText('E', cx + radius + 8, cy + 4);
-  ctx.fillText('W', cx - radius - 16, cy + 4);
+  ctx.fillText('N', cx - 4, 16);
+  ctx.fillText('S', cx - 4, H - 6);
+  ctx.fillText('E', W - 14, cy + 4);
+  ctx.fillText('W', 6, cy + 4);
 
   // runway strip, drawn from the threshold away from the approach direction
   const hdgRad = (rwy.headingDeg * Math.PI) / 180;
@@ -881,11 +927,15 @@ function drawPpi() {
   ctx.stroke();
   ctx.lineWidth = 1.5;
 
+  drawBullseyeMarker(ctx, W, H, sx, sy, rwy);
+
   for (const t of state.tracks) {
     const p = relToRunway(t, rwy);
     if (!p) continue;
-    if (Math.hypot(p.x, p.y) / M_PER_NM > state.gciRangeNm) continue;
     const x = sx(p.x), y = sy(p.y);
+    // cull against the canvas, not against a range from the field: once the
+    // view is panned the two are no longer the same thing
+    if (x < -40 || x > W + 40 || y < -40 || y > H + 40) continue;
 
     let color = '#39ff8b';
     if (t.id === state.targetId) color = '#ff5252';
@@ -906,6 +956,135 @@ function drawPpi() {
       ctx.stroke();
     }
   }
+}
+
+/* ---------- PPI geometry (pan / cursor) ---------- */
+
+/** metres per canvas pixel on the PPI at the current range setting */
+function ppiMPerPx(canvas) {
+  const radius = Math.min(canvas.width, canvas.height) / 2 - 40;
+  return (state.gciRangeNm * M_PER_NM) / radius;
+}
+
+function resetGciPan() {
+  state.gciPan = { x: 0, y: 0 };
+}
+
+/** canvas pixel -> metres east/north of the runway threshold */
+function ppiWorldAt(canvas, px, py) {
+  const mPerPx = ppiMPerPx(canvas);
+  return {
+    x: state.gciPan.x + (px - canvas.width / 2) * mPerPx,
+    y: state.gciPan.y - (py - canvas.height / 2) * mPerPx,
+  };
+}
+
+/* ---------- bullseye ---------- */
+
+function selectedBullseye() {
+  if (!state.bullseyes.length) return null;
+  return state.bullseyes.find((b) => b.id === state.bullseyeId) || state.bullseyes[0];
+}
+
+/** short label for the reference in use, e.g. 'Blue' / 'Allies' / 'Bullseye' */
+function bullseyeLabel(b) {
+  return b ? b.color || b.coalition || b.name || 'BULLS' : '';
+}
+
+/**
+ * Bearing and range FROM the selected bullseye TO a point given in the
+ * runway-local frame (metres east/north of the threshold) — the reading a
+ * controller passes as "bullseye 270/85".
+ *
+ * DCS native metres are a flat plane, so whenever both the bullseye and the
+ * runway carry them the offset is exact. The lat/lon fallback inverts the flat
+ * mapping the scope is drawn with and then measures with the scale at the
+ * midpoint latitude: a bullseye is often 50+ nm away, far enough for the
+ * threshold's own cos(lat) to be several nm out at high latitudes.
+ */
+function bullseyeVector(pt) {
+  const b = selectedBullseye();
+  const rwy = runwayCfg();
+  const thr = rwy && rwy.threshold;
+  if (!b || !thr) return null;
+
+  let east, north;
+  if (b.u !== undefined && b.u !== null && thr.z !== undefined) {
+    east = thr.z + pt.x - b.u;
+    north = thr.x + pt.y - b.v;
+  } else if (b.lat !== undefined && b.lat !== null && thr.lat !== undefined) {
+    const p = offsetLatLon(thr, pt.x, pt.y);
+    const midLat = (((p.lat + b.lat) / 2) * Math.PI) / 180;
+    east = (p.lon - b.lon) * EARTH_M_PER_DEG * Math.cos(midLat);
+    north = (p.lat - b.lat) * EARTH_M_PER_DEG;
+  } else {
+    return null;
+  }
+
+  return {
+    brgDeg: normDeg((Math.atan2(east, north) * 180) / Math.PI),
+    rangeNm: Math.hypot(east, north) / M_PER_NM,
+  };
+}
+
+/** 'BULLS(Blue) 274/032' — the bullseye call for a point on the scope */
+function fmtBullseye(pt) {
+  const v = bullseyeVector(pt);
+  if (!v) return null;
+  return (
+    'BULLS(' + bullseyeLabel(selectedBullseye()) + ') ' +
+    fmtBrg(v.brgDeg) + '/' + String(Math.round(v.rangeNm)).padStart(3, '0')
+  );
+}
+
+function drawBullseyeMarker(ctx, W, H, sx, sy, rwy) {
+  const b = selectedBullseye();
+  if (!b) return;
+  const p = relToRunway(b, rwy);
+  if (!p) return;
+  const x = sx(p.x), y = sy(p.y);
+  if (x < 0 || x > W || y < 0 || y > H) return; // panned out of view
+
+  ctx.save();
+  ctx.strokeStyle = '#c9a227';
+  ctx.fillStyle = '#c9a227';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x, y, 7, 0, Math.PI * 2);
+  ctx.moveTo(x - 12, y);
+  ctx.lineTo(x + 12, y);
+  ctx.moveTo(x, y - 12);
+  ctx.lineTo(x, y + 12);
+  ctx.stroke();
+  ctx.font = '11px Consolas, monospace';
+  ctx.fillText('BULLS ' + bullseyeLabel(b), x + 14, y - 6);
+  ctx.restore();
+}
+
+function updateBullseyeSelect() {
+  const label = document.getElementById('bullseyeLabel');
+  const sel = document.getElementById('bullseyeSelect');
+  // one bullseye needs no picker: the readout already names it
+  label.hidden = state.bullseyes.length < 2;
+  if (label.hidden) return;
+
+  const sig = state.bullseyes.map((b) => b.id).join(',');
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = '';
+    for (const b of state.bullseyes) {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      opt.textContent = bullseyeLabel(b);
+      sel.appendChild(opt);
+    }
+  }
+  const cur = selectedBullseye();
+  sel.value = cur ? cur.id : '';
+  sel.onchange = () => {
+    state.bullseyeId = sel.value || null;
+    render();
+  };
 }
 
 function updateOwnshipSelect() {
@@ -1630,6 +1809,134 @@ document.getElementById('gciRange').addEventListener('change', (ev) => {
   render();
 });
 
+/* ---------- GCI: drag to pan, cursor bullseye readout ---------- */
+
+/**
+ * Drag a scope around. The offset is kept in metres by the caller, so the
+ * ground under the cursor stays under the cursor whatever the zoom level.
+ * A drag that actually moved swallows the click that ends it, otherwise
+ * every pan would designate whatever blip happened to be under the pointer.
+ */
+function attachCanvasPan(canvasId, getPan, setPan, getMPerPx) {
+  const el = document.getElementById(canvasId);
+  if (!el) return;
+  let drag = null; // { x, y, moved } in client pixels
+
+  // canvas pixels per client pixel; 0 while the scope has no layout (hidden tab)
+  const scaleOf = () => {
+    const w = el.getBoundingClientRect().width;
+    return w ? el.width / w : 0;
+  };
+
+  const begin = (x, y) => {
+    dragSuppressClick.delete(canvasId);
+    drag = { x, y, moved: 0 };
+  };
+
+  const move = (x, y) => {
+    if (!drag) return;
+    const scale = scaleOf();
+    const dx = (x - drag.x) * scale;
+    const dy = (y - drag.y) * scale;
+    drag.x = x;
+    drag.y = y;
+    drag.moved += Math.abs(dx) + Math.abs(dy);
+    const m = getMPerPx();
+    const p = getPan();
+    setPan({ x: p.x - dx * m, y: p.y + dy * m });
+  };
+
+  const end = () => {
+    if (!drag) return;
+    if (drag.moved > 4) dragSuppressClick.add(canvasId);
+    drag = null;
+    el.style.cursor = '';
+  };
+
+  /* Pointer events when the browser has them, plain mouse events otherwise.
+   * move/up are bound to `window`, not to the canvas: the drag then survives
+   * the pointer leaving the scope without depending on pointer capture. */
+  const hasPointer = typeof window.PointerEvent === 'function';
+  const DOWN = hasPointer ? 'pointerdown' : 'mousedown';
+  const MOVE = hasPointer ? 'pointermove' : 'mousemove';
+  const UP = hasPointer ? 'pointerup' : 'mouseup';
+
+  el.addEventListener(DOWN, (ev) => {
+    if (ev.pointerType === 'touch' || ev.button !== 0) return; // touch: see below
+    ev.preventDefault(); // no text selection / native image drag mid-pan
+    begin(ev.clientX, ev.clientY);
+    el.style.cursor = 'grabbing';
+  });
+  window.addEventListener(MOVE, (ev) => {
+    if (!drag || ev.pointerType === 'touch') return;
+    move(ev.clientX, ev.clientY);
+    render();
+  });
+  window.addEventListener(UP, end);
+  window.addEventListener('pointercancel', end);
+  window.addEventListener('blur', end);
+
+  // one finger pans; two fingers belong to the pinch-zoom handler
+  el.addEventListener('touchstart', (ev) => {
+    if (ev.touches.length === 1) begin(ev.touches[0].clientX, ev.touches[0].clientY);
+    else end();
+  }, { passive: true });
+  el.addEventListener('touchmove', (ev) => {
+    if (!drag || ev.touches.length !== 1) return;
+    ev.preventDefault();
+    move(ev.touches[0].clientX, ev.touches[0].clientY);
+    render();
+  }, { passive: false });
+  el.addEventListener('touchend', end);
+  el.addEventListener('touchcancel', end);
+}
+
+attachCanvasPan(
+  'ppiScope',
+  () => state.gciPan,
+  (p) => {
+    state.gciPan = p;
+  },
+  () => ppiMPerPx(document.getElementById('ppiScope'))
+);
+
+document.getElementById('gciCenter').addEventListener('click', () => {
+  resetGciPan();
+  render();
+  refreshCursorReadout();
+});
+
+/* Bullseye readout for whatever the pointer is over. Written straight into the
+ * status span instead of going through render(), so moving the mouse never
+ * forces a scope (and map tile) redraw. */
+
+let cursorClient = null; // last pointer position over the PPI, in client pixels
+
+function updateCursorReadout(clientX, clientY) {
+  const el = document.getElementById('ppiScope');
+  cursorClient = { x: clientX, y: clientY };
+  const rect = el.getBoundingClientRect();
+  const px = (clientX - rect.left) * (el.width / rect.width);
+  const py = (clientY - rect.top) * (el.height / rect.height);
+  const txt = fmtBullseye(ppiWorldAt(el, px, py));
+  document.getElementById('gciCursor').textContent =
+    txt || (state.bullseyes.length ? 'BULLS --' : 'BULLS -- (no bullseye in stream)');
+}
+
+/** the same pixel means new ground after a zoom or a recentre */
+function refreshCursorReadout() {
+  if (cursorClient) updateCursorReadout(cursorClient.x, cursorClient.y);
+}
+
+(() => {
+  const el = document.getElementById('ppiScope');
+  el.addEventListener('pointermove', (ev) => updateCursorReadout(ev.clientX, ev.clientY));
+  el.addEventListener('pointerleave', () => {
+    cursorClient = null;
+    document.getElementById('gciCursor').textContent = 'BULLS --';
+  });
+})();
+
 /* ---------- mouse wheel zoom ---------- */
 
 function attachWheelZoom(canvasId, getRange, setRange) {
@@ -1654,6 +1961,7 @@ attachWheelZoom(
       if (Math.abs(parseFloat(opt.value) - state.gciRangeNm) < 0.05) sel.value = opt.value;
     }
     render();
+    refreshCursorReadout();
   }
 );
 
@@ -1754,6 +2062,7 @@ attachPinchZoom(
   (v) => {
     state.gciRangeNm = Math.min(120, Math.max(2, Math.round(v * 10) / 10));
     render();
+    refreshCursorReadout();
   }
 );
 
@@ -1798,6 +2107,10 @@ window.addEventListener('resize', () => {
 });
 
 /* ---------- boot ---------- */
+
+/* Printed once at start-up: tells you at a glance whether the browser is
+ * running the current console or a cached older one. */
+console.log('[gca] console build ' + CLIENT_BUILD);
 
 fitCanvases();
 connectWs();

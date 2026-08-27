@@ -153,6 +153,7 @@ class WsHub {
         counts: snap.counts,
         connected: g.source.client.connected,
         tracks: snap.tracks,
+        bullseyes: snap.bullseyes,
       });
       for (const ws of g.clients) if (ws.readyState === 1) ws.send(payload);
 

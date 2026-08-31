@@ -32,6 +32,7 @@ class TrackStore {
     const gca = (cfg && cfg.gca) || {};
     this.tuning = {
       staleAfterSec: gca.staleAfterSec ?? 15,
+      forgetAfterSec: gca.forgetAfterSec ?? 3600,
       azToleranceDeg: gca.azToleranceDeg ?? 0.8,
       gsToleranceDeg: gca.gsToleranceDeg ?? 0.4,
     };
@@ -60,6 +61,10 @@ class TrackStore {
     // so the interval never reaches the minimum and nothing is ever computed.
     const pos = planar(t);
     if (pos) {
+      // A record that has been quiet for a long time (parked on the ramp, see
+      // prune()) must not be differentiated across the whole gap: that reports
+      // a taxiing aircraft as stationary until the average washes out.
+      if (t.velRef && now - t.velRef.at > this.tuning.staleAfterSec * 1000) t.velRef = null;
       if (!t.velRef) {
         t.velRef = { e: pos.e, n: pos.n, altM: t.altM, at: now };
       } else {
@@ -81,13 +86,37 @@ class TrackStore {
     t.lastUpdate = now;
   }
 
+  /** objects we are currently hearing from, i.e. what snapshot() will consider */
+  liveCount() {
+    const freshAfter = Date.now() - this.tuning.staleAfterSec * 1000;
+    let n = 0;
+    for (const t of this.tracks.values()) if ((t.lastUpdate || 0) >= freshAfter) n++;
+    return n;
+  }
+
   remove(id) {
     this.tracks.delete(id);
     this.bullseyes.delete(id);
   }
 
+  /**
+   * Forget objects we will never hear about again.
+   *
+   * This deliberately uses a much longer threshold than the display staleness
+   * in snapshot(), because deleting a merely *quiet* track loses data the
+   * stream never repeats. ACMI is a delta format on two levels: an object that
+   * does not move emits no lines at all, and the full property set (Type, Name,
+   * Pilot, ...) is sent once per client, when the object first appears. So a
+   * parked aircraft goes silent, and if we drop its record it comes back from
+   * the first taxi update as a bare `T=` with no Type at all: categorize()
+   * never runs, isAirborne() is false forever and the aircraft is filtered out
+   * of every later snapshot -- invisible for the rest of the session, even in
+   * flight. Objects that genuinely left announce it with `-<id>` (remove()) or
+   * are dropped wholesale when the recording restarts (clear()), so this timer
+   * only has to bound memory for ground clutter nobody ever mentions again.
+   */
   prune() {
-    const cutoff = Date.now() - this.tuning.staleAfterSec * 1000;
+    const cutoff = Date.now() - this.tuning.forgetAfterSec * 1000;
     for (const [id, t] of this.tracks) {
       if ((t.lastUpdate || 0) < cutoff) this.tracks.delete(id);
     }
@@ -162,8 +191,12 @@ class TrackStore {
     this.prune();
     const tracks = [];
     let total = 0;
+    // Objects we have not heard from for a while are not drawn, but their
+    // records stay in the map so their identity survives the quiet spell.
+    const freshAfter = Date.now() - this.tuning.staleAfterSec * 1000;
 
     for (const t of this.tracks.values()) {
+      if ((t.lastUpdate || 0) < freshAfter) continue;
       total++;
       // Airborne aircraft plus Sea vessels (carriers for the LSO view);
       // everything else (ground clutter, navaids, ...) stays filtered out.
@@ -207,7 +240,7 @@ class TrackStore {
       // Reference points, not traffic: the console reads cursor position
       // against them, they never appear in the track list.
       bullseyes: [...this.bullseyes.values()],
-      counts: { aircraft: tracks.length, objects: total },
+      counts: { aircraft: tracks.length, objects: total, retained: this.tracks.size },
     };
   }
 }

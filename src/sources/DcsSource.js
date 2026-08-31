@@ -155,7 +155,10 @@ class DcsSource {
       mission: tv.mission,
       lastDataAt: tv.lastDataAt,
       runways: this.runwayProvider.status,
-      objects: this.store.tracks.size,
+      // Live objects, not the map size: quiet records are retained for an hour
+      // so their identity survives a parked spell (see TrackStore.prune()).
+      objects: this.store.liveCount(),
+      retained: this.store.tracks.size,
     };
   }
 }

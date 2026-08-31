@@ -358,7 +358,12 @@ test('TrackStore: a bullseye sent once survives pruning, clear() drops it', () =
   // the stream sends static objects once: age the record well past staleAfterSec
   store.tracks.get('90').lastUpdate = Date.now() - 60 * 1000;
   assert.strictEqual(store.snapshot(null).bullseyes.length, 1, 'must outlive prune()');
-  assert.strictEqual(store.tracks.has('90'), false, 'the track record itself is pruned as usual');
+  assert.strictEqual(store.tracks.has('90'), true, 'a merely quiet record is hidden, not dropped');
+
+  // ...and the track record is only forgotten once it is past forgetAfterSec
+  store.tracks.get('90').lastUpdate = Date.now() - 2 * 3600 * 1000;
+  assert.strictEqual(store.snapshot(null).bullseyes.length, 1, 'must still outlive prune()');
+  assert.strictEqual(store.tracks.has('90'), false, 'eventually forgotten');
 
   store.applyUpdate({ id: '91', props: { Type: 'Navaid+Static+Bullseye', lat: 36.5, lon: 140.3 } });
   store.remove('91');
@@ -366,6 +371,48 @@ test('TrackStore: a bullseye sent once survives pruning, clear() drops it', () =
 
   store.clear(); // recording restart / stream drop
   assert.strictEqual(store.snapshot(null).bullseyes.length, 0);
+});
+
+test('TrackStore: an aircraft that parks and taxies again keeps its identity', () => {
+  // Regression (DCSWebGCA#12): ACMI is a delta format on two levels. Type/Name/
+  // Pilot are sent once, when the object appears, and a stationary aircraft
+  // emits no lines at all. Deleting the record after staleAfterSec meant the
+  // first taxi update rebuilt the track from a bare `T=`, leaving Type empty:
+  // categorize() never ran, isAirborne() stayed false and the aircraft was
+  // filtered out of every later snapshot for the rest of the session -- while
+  // still receiving position updates several times a second, in flight
+  // included.
+  const store = makeStore();
+  store.applyUpdate({
+    id: '44805',
+    props: { Type: 'Air+FixedWing', Name: 'FA-18C_hornet', Pilot: 'shinohara', lat: 42.24, lon: 42.06, altM: 15 },
+  });
+  assert.deepStrictEqual(store.snapshot(null).tracks.map((t) => t.pilot), ['shinohara']);
+
+  // parked on the ramp: nothing on the wire for far longer than staleAfterSec
+  store.tracks.get('44805').lastUpdate = Date.now() - 20 * 60 * 1000;
+  const quiet = store.snapshot(null);
+  assert.deepStrictEqual(quiet.tracks, [], 'not drawn while stale');
+  assert.strictEqual(quiet.counts.objects, 0);
+  assert.strictEqual(quiet.counts.retained, 1, 'but still remembered');
+
+  // taxi: a partial transform, which is all the exporter ever sends again
+  store.applyUpdate({ id: '44805', props: { lat: 42.241, lon: 42.061, altM: 16 } });
+  const moving = store.snapshot(null);
+  assert.strictEqual(moving.tracks.length, 1, 'back on the scope as soon as it moves');
+  assert.strictEqual(moving.tracks[0].pilot, 'shinohara');
+  assert.strictEqual(moving.tracks[0].category, 'FixedWing');
+  assert.strictEqual(moving.tracks[0].name, 'FA-18C_hornet');
+});
+
+test('TrackStore: a removal line still drops the identity for good', () => {
+  // The counterpart to the test above: `-<id>` means the object really left,
+  // so nothing about it may survive to be merged into a later reuse of the id.
+  const store = makeStore();
+  store.applyUpdate({ id: '7', props: { Type: 'Air+FixedWing', Pilot: 'gone', lat: 36, lon: 140, altM: 1000 } });
+  store.remove('7');
+  assert.strictEqual(store.tracks.has('7'), false);
+  assert.strictEqual(store.snapshot(null).counts.retained, 0);
 });
 
 test('Talkdown: only aircraft established on final are talked down', () => {

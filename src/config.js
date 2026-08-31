@@ -20,6 +20,9 @@ const EXAMPLE_PATH = path.join(ROOT, 'config', 'config.example.json');
 
 const DEFAULT_GCA = {
   staleAfterSec: 15,
+  // How long a track record is kept after it goes quiet. Far longer than
+  // staleAfterSec on purpose: see TrackStore.prune().
+  forgetAfterSec: 3600,
   glidepathDeg: 3.0,
   azToleranceDeg: 0.8,
   gsToleranceDeg: 0.4,

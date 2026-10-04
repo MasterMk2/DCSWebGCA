@@ -7,7 +7,7 @@
     "start": "node src/index.js",
     "mock": "node tools/mock-tacview.js",
     "smoke": "node tools/smoke-test.js",
-    "test": "node --test tests/unit.test.js"
+    "test": "node --test tests/*.test.js"
   },
   "engines": {
     "node": ">=18"

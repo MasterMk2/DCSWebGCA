@@ -154,6 +154,7 @@ class DcsSource {
       tacview: `${tv.host}:${tv.port}`,
       mission: tv.mission,
       lastDataAt: tv.lastDataAt,
+      aircraftRecovery: tv.aircraftRecovery,
       runways: this.runwayProvider.status,
       // Live objects, not the map size: quiet records are retained for an hour
       // so their identity survives a parked spell (see TrackStore.prune()).

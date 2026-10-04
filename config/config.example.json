@@ -52,7 +52,13 @@
         "port": 42674,
         "password": "",
         "reconnectDelayMs": 5000,
-        "clientName": "DCSWebGCA"
+        "clientName": "DCSWebGCA",
+        "aircraftRecovery": {
+          "enabled": true,
+          "staleAfterMs": 30000,
+          "probeIntervalMs": 120000,
+          "probeTimeoutMs": 10000
+        }
       },
       "_dcssbServerName": "name of this server in DCSServerBot's servers.yaml",
       "dcssbServerName": null,

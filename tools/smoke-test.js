@@ -98,6 +98,12 @@ async function main() {
     let state = await waitForTracks();
     if (!state) throw new Error('no tracks received');
 
+    const health = JSON.parse((await get('/api/health')).body);
+    const recovery = health.sources[0].aircraftRecovery;
+    if (!recovery || !recovery.enabled || recovery.probes !== 0 || recovery.recoveries !== 0) {
+      throw new Error('healthy stream must expose recovery counters without opening probes');
+    }
+
     // ground speed is derived from position differencing, which needs
     // at least ~0.5 s of samples; give the pipeline a moment
     await new Promise((r) => setTimeout(r, 1500));

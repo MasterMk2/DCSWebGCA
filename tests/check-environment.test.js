@@ -3,7 +3,37 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
+const stream = require('node:stream');
+const { spawnSync } = require('node:child_process');
 const { childEnvironment, FIXTURE } = require('../tools/check');
+const CHECK = path.resolve(__dirname, '../tools/check.js');
+
+function runDoctor(args) {
+  const result = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 10000 });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+test('check: doctor reports the runtime byte high-water mark when available', () => {
+  const report = runDoctor([CHECK, 'doctor']);
+  const expected = typeof stream.getDefaultHighWaterMark === 'function'
+    ? stream.getDefaultHighWaterMark(false) : null;
+  assert.equal(report.byteHighWaterMark, expected);
+  assert.equal(report.node, process.version);
+});
+
+test('check: doctor succeeds when the Node 18 high-water-mark API is absent', () => {
+  const report = runDoctor(['-e', `
+    require('node:stream').getDefaultHighWaterMark = undefined;
+    process.argv = [process.execPath, ${JSON.stringify(CHECK)}, 'doctor'];
+    require('node:module').runMain();
+  `]);
+  assert.equal(report.byteHighWaterMark, null);
+  assert.equal(report.node, process.version);
+  assert.equal(report.ws, require('ws/package.json').version);
+});
 
 test('check: deployment settings cannot leak into synthetic child processes', () => {
   const original = {

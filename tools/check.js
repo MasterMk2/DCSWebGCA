@@ -23,6 +23,7 @@ function childEnvironment(base, cacheDir) {
 }
 
 function doctor() {
+  const stream = require('node:stream');
   // Only allow-listed values, never process.env or user paths.
   console.log(JSON.stringify({
     node: process.version,
@@ -31,7 +32,9 @@ function doctor() {
     ws: require('ws/package.json').version,
     openssl: process.versions.openssl,
     undici: process.versions.undici,
-    byteHighWaterMark: require('node:stream').getDefaultHighWaterMark(false),
+    // This diagnostic API is absent on Node 18 releases before 18.17.
+    byteHighWaterMark: typeof stream.getDefaultHighWaterMark === 'function'
+      ? stream.getDefaultHighWaterMark(false) : null,
   }, null, 2));
 }
 

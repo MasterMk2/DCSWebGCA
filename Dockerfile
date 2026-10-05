@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22.23.3-alpine3.24
 
 ENV NODE_ENV=production \
     # Listen on all interfaces inside the container

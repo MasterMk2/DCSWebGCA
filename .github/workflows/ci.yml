@@ -5,20 +5,48 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
 
       - run: npm ci
 
-      - name: Unit tests
-        run: npm test
+      - name: Unit tests and isolated synthetic TCP / REST / WebSocket check
+        run: npm run check
 
-      - name: Smoke test (mock Tacview -> server -> API)
-        run: node tools/smoke-test.js
+      - name: Verify lockfile was not modified
+        run: git diff --exit-code -- package-lock.json
+
+  container-candidate:
+    # Local candidate only: no GHCR login, image push, environment or secrets.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build the pinned Alpine candidate without publishing
+        run: docker build --platform linux/amd64 --tag dcswebgca-node22-candidate .
+      - name: Test the actual musl container on loopback only
+        run: |
+          docker run --rm --network none --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --mount type=bind,src="$PWD/tests",dst=/app/tests,readonly \
+            --mount type=bind,src="$PWD/tools",dst=/app/tools,readonly \
+            dcswebgca-node22-candidate node tools/check.js
+      - name: Show the candidate runtime without deployment configuration
+        run: |
+          docker run --rm --network none dcswebgca-node22-candidate \
+            sh -c 'cat /etc/alpine-release && node --version && npm --version'

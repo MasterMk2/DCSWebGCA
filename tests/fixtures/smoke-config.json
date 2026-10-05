@@ -1,0 +1,25 @@
+{
+  "server": { "port": 8091, "bind": "127.0.0.1", "broadcastIntervalMs": 200 },
+  "dcssb": { "enabled": false, "baseUrl": "", "apiKey": "" },
+  "auth": { "token": "" },
+  "gca": { "talkdownIntervalSec": 15, "talkdownMaxRangeNm": 12 },
+  "sources": [{
+    "id": "synthetic",
+    "name": "Synthetic Tacview",
+    "tacview": {
+      "host": "127.0.0.1", "port": 34251, "password": "",
+      "reconnectDelayMs": 5000, "clientName": "DCSWebGCA-test",
+      "aircraftRecovery": {
+        "enabled": true, "staleAfterMs": 30000,
+        "probeIntervalMs": 120000, "probeTimeoutMs": 10000
+      }
+    },
+    "dcssbServerName": null,
+    "runways": [{
+      "id": "Nellis 21L",
+      "threshold": { "lat": 36.2377, "lon": -115.0345, "altFt": 1870 },
+      "headingDeg": 210, "glidepathDeg": 3.0, "lengthNm": 1.2
+    }],
+    "defaultRunway": "Nellis 21L"
+  }]
+}

@@ -167,8 +167,11 @@ ACMI は差分形式なので、駐機中の無更新を障害と決めつけな
 
 ## ローカル開発
 
+Node22の固定実行環境・分離したcheck・コンテナ検証と公開影響は
+[実行環境の移行候補](docs/node22-runtime-candidate.md) を参照してください。
+
 ```bash
-npm install
+npm ci
 
 # ターミナル1: モック Tacview サーバ (本物と同じハンドシェイク + ACMI 2.2 を喋る)
 npm run mock
@@ -182,6 +185,7 @@ TACVIEW_PORT=34251 npm start     # http://localhost:8080
 ```bash
 npm test              # ユニットテスト + 合成 TCP による更新停止・回復検証
 npm run smoke         # mock + サーバを起動して REST と WS を検証
+npm run check         # 固定の合成設定で上記を通す（本番設定を継承しない）
 ```
 
 ## デプロイ (Docker)

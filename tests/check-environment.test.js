@@ -3,10 +3,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const stream = require('node:stream');
 const { spawnSync } = require('node:child_process');
-const { childEnvironment, FIXTURE } = require('../tools/check');
+const { childEnvironment, FIXTURE, testCommands } = require('../tools/check');
 const CHECK = path.resolve(__dirname, '../tools/check.js');
 
 function runDoctor(args) {
@@ -33,6 +34,32 @@ test('check: doctor succeeds when the Node 18 high-water-mark API is absent', ()
   assert.equal(report.byteHighWaterMark, null);
   assert.equal(report.node, process.version);
   assert.equal(report.ws, require('ws/package.json').version);
+});
+
+test('check: Node 18.0 runs every test file directly and preserves failures', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dcswebgca-runner-test-'));
+  try {
+    const pass = path.join(directory, 'pass.cjs');
+    const fail = path.join(directory, 'fail.cjs');
+    fs.writeFileSync(pass, "require('node:test')('passes', () => {});\n");
+    fs.writeFileSync(fail, "require('node:test')('fails', () => { throw new Error('expected failure'); });\n");
+    const commands = testCommands([pass, fail], '18.0.0');
+    assert.deepEqual(commands, [[pass], [fail]]);
+    for (const [index, args] of commands.entries()) {
+      const result = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 10000 });
+      assert.ifError(result.error);
+      assert.equal(result.status, index === 0 ? 0 : 1, result.stderr);
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('check: runtimes with the CLI runner include every test in one invocation', () => {
+  const files = ['first.test.js', 'second.test.js'];
+  for (const version of ['18.1.0', '18.16.0', '22.23.3']) {
+    assert.deepEqual(testCommands(files, version), [['--test', ...files]]);
+  }
 });
 
 test('check: deployment settings cannot leak into synthetic child processes', () => {

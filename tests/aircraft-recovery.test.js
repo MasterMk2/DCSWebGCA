@@ -11,6 +11,18 @@ const sample = { Type: 'Air+FixedWing', Pilot: 'Test pilot', Name: 'F-16C', u: 1
 const scene = { ReferenceTime: '2026-01-01T00:00:00Z', Title: 'Synthetic mission' };
 const update = (m, props, now = 0, id = '1') => m.update({ id, props }, now);
 
+// Explicit cleanup also works on early Node 18, before TestContext.after was available.
+function testWithCleanup(name, fn) {
+  return test(name, async () => {
+    const cleanups = [];
+    try {
+      await fn({ after(cleanup) { cleanups.push(cleanup); } });
+    } finally {
+      for (const cleanup of cleanups.reverse()) await cleanup();
+    }
+  });
+}
+
 function fixture(t) {
   const client = new TacviewClient({ host: 'unused.invalid', port: 1 });
   let destroys = 0;
@@ -100,7 +112,7 @@ test('freshness: memory, probe candidates and retention are bounded; candidates 
   assert.equal(m.records.size, 0);
 });
 
-test('recovery: a quiet parked aircraft, missing aircraft or noisy snapshot never reconnects', (t) => {
+testWithCleanup('recovery: a quiet parked aircraft, missing aircraft or noisy snapshot never reconnects', (t) => {
   for (const props of [sample, { ...sample, u: 100.5 }, null]) {
     const f = fixture(t);
     const state = begin(f.client, props || {});
@@ -111,7 +123,7 @@ test('recovery: a quiet parked aircraft, missing aircraft or noisy snapshot neve
   }
 });
 
-test('recovery: verified drift triggers once; cooldown persists through resets', (t) => {
+testWithCleanup('recovery: verified drift triggers once; cooldown persists through resets', (t) => {
   const f = fixture(t);
   const state = begin(f.client, { ...sample, u: 120 });
   f.client.checkHealth(40001);
@@ -128,7 +140,7 @@ test('recovery: verified drift triggers once; cooldown persists through resets',
   assert.equal(f.client.recoveryProbe, null);
 });
 
-test('recovery: primary updates, removal and ID reuse cancel evidence', (t) => {
+testWithCleanup('recovery: primary updates, removal and ID reuse cancel evidence', (t) => {
   for (const operation of ['update', 'remove', 'reuse']) {
     const f = fixture(t);
     const state = begin(f.client, { ...sample, u: 120 });
@@ -140,7 +152,7 @@ test('recovery: primary updates, removal and ID reuse cancel evidence', (t) => {
   }
 });
 
-test('recovery: mission mismatch, disconnect, failed probe and paused simulation are safe', (t) => {
+testWithCleanup('recovery: mission mismatch, disconnect, failed probe and paused simulation are safe', (t) => {
   for (const operation of ['mission', 'disconnect', 'failure', 'pause', 'newSocket']) {
     const f = fixture(t);
     const state = begin(f.client, { ...sample, u: 120 });
@@ -156,7 +168,7 @@ test('recovery: mission mismatch, disconnect, failed probe and paused simulation
   }
 });
 
-test('recovery: stop, FileType restart, time rewind and probe close clean up without recovery', (t) => {
+testWithCleanup('recovery: stop, FileType restart, time rewind and probe close clean up without recovery', (t) => {
   for (const operation of ['stop', 'header', 'rewind', 'close']) {
     const f = fixture(t);
     const state = begin(f.client, { ...sample, u: 120 });
@@ -171,7 +183,7 @@ test('recovery: stop, FileType restart, time rewind and probe close clean up wit
   }
 });
 
-test('recovery: disabled, paused, quiet and unknown-scene streams do not probe', (t) => {
+testWithCleanup('recovery: disabled, paused, quiet and unknown-scene streams do not probe', (t) => {
   for (const operation of ['disabled', 'pause', 'scene', 'stopped', 'quiet']) {
     const f = fixture(t);
     if (operation === 'disabled') f.client.recoveryCfg.enabled = false;
@@ -185,7 +197,7 @@ test('recovery: disabled, paused, quiet and unknown-scene streams do not probe',
   }
 });
 
-test('recovery: probe removal and restart discard previously collected positions', (t) => {
+testWithCleanup('recovery: probe removal and restart discard previously collected positions', (t) => {
   for (const operation of ['remove', 'restart']) {
     const f = fixture(t);
     const state = begin(f.client, { ...sample, u: 120 });
@@ -207,7 +219,7 @@ test('recovery: invalid configuration fails fast; child never recursively probes
   parent.stop();
 });
 
-test('recovery: synthetic TCP snapshot verifies stale position and restores live updates', async (t) => {
+testWithCleanup('recovery: synthetic TCP snapshot verifies stale position and restores live updates', async (t) => {
   const sockets = new Set();
   let connections = 0;
   const server = net.createServer((socket) => {
@@ -251,7 +263,7 @@ test('recovery: synthetic TCP snapshot verifies stale position and restores live
   assert.equal(client.recoveryProbe, null);
 });
 
-test('recovery: timeout disposes auxiliary connection even when handshake never completes', async (t) => {
+testWithCleanup('recovery: timeout disposes auxiliary connection even when handshake never completes', async (t) => {
   const f = fixture(t);
   f.client.recoveryCfg.probeTimeoutMs = 1000;
   const state = begin(f.client, {});

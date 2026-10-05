@@ -38,6 +38,13 @@ function doctor() {
   }, null, 2));
 }
 
+function testCommands(tests, version = process.versions.node) {
+  const [major, minor] = version.split('.').map(Number);
+  // Node 18.0 has node:test but no --test CLI; each file still reports failures via its exit code.
+  return major === 18 && minor === 0
+    ? tests.map((file) => [file]) : [['--test', ...tests]];
+}
+
 function main(command) {
   if (command === 'doctor') { doctor(); return 0; }
   if (command !== undefined && command !== 'smoke') {
@@ -54,7 +61,7 @@ function main(command) {
     if (!tests.length) { console.error('No tests found'); return 1; }
     const commands = command === 'smoke'
       ? [['tools/smoke-test.js']]
-      : [['--test', ...tests], ['tools/smoke-test.js']];
+      : [...testCommands(tests), ['tools/smoke-test.js']];
     for (const args of commands) {
       const result = spawnSync(process.execPath, args, {
         cwd: ROOT, env, stdio: 'inherit', timeout: 120000,
@@ -68,5 +75,5 @@ function main(command) {
   }
 }
 
-module.exports = { childEnvironment, FIXTURE };
+module.exports = { childEnvironment, FIXTURE, testCommands };
 if (require.main === module) process.exitCode = main(process.argv[2]);

@@ -83,6 +83,23 @@ h2 small { margin-left: 6px; font-size: 12px; font-weight: 400; color: var(--tex
   border-bottom: 1px solid var(--line);
 }
 
+/* the way back to the community site: quiet, so the console stays the focus */
+.home-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  margin-left: -8px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.home-link:hover { background: var(--surface-2); color: var(--text); }
+.home-link + .brand { padding-left: 16px; border-left: 1px solid var(--line); }
+
 .brand {
   display: flex;
   align-items: center;
@@ -388,6 +405,9 @@ body.stale .canvas-wrap canvas { opacity: 0.45; }
 .log-panel { min-height: 96px; }
 /* the card gives up height (and scrolls) before the lists below disappear */
 .panel.focus { flex: 0 1 auto; min-height: 160px; }
+/* the intercept card keeps the height of a full solution, so the list under
+ * it does not jump away when the TGT pick completes the solution */
+#mode-gci .panel.focus { min-height: 230px; }
 .panel.focus .focus-body { overflow-y: auto; min-height: 0; }
 
 .panel-head {
@@ -616,6 +636,7 @@ button.track:hover { background: var(--surface-2); }
   .context { height: 30px; }
   .scope-head { min-height: 38px; padding-top: 3px; padding-bottom: 3px; }
   .focus-body { padding: 8px 12px 10px; }
+  #mode-gci .panel.focus { min-height: 216px; }
   .guidance { margin: 4px 0 6px; font-size: 16px; }
   .readout { gap: 4px 12px; }
   .readout .key dd { font-size: 19px; }
@@ -623,6 +644,15 @@ button.track:hover { background: var(--surface-2); }
   .sparkline { height: 28px; }
   .spark-legend { display: none; }
   .last-call { margin-top: 6px; padding: 6px 8px; font-size: 13px; }
+}
+
+/* ---------- very short screens (phone landscape, 200% zoom) ---------- */
+/* below this the scopes and the side panels cannot share the height, so the
+ * page scrolls instead of squeezing the scopes to slivers */
+
+@media (max-height: 600px) and (min-width: 761px) {
+  .app { height: auto; grid-template-rows: auto auto auto; }
+  .mode { height: 600px; }
 }
 
 /* ---------- mid-size: two-row top bar ---------- */
@@ -705,4 +735,7 @@ button.track:hover { background: var(--surface-2); }
   .track { padding-top: 10px; padding-bottom: 10px; }
   .chip-btn { height: 40px; min-width: 56px; }
   .link-btn { min-height: 40px; }
+  #mode-gci .panel.focus { min-height: 242px; }
+  .home-link { min-height: 44px; }
+  .home-link + .brand { padding-left: 8px; }
 }

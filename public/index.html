@@ -3,173 +3,236 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
   <title>DCS Web GCA</title>
   <link rel="icon" type="image/svg+xml" href="icon.svg" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=2026-10-30-ui" />
 </head>
 <body>
-  <header>
-    <h1><img src="icon.svg" width="22" height="22" alt="" style="vertical-align: -4px;" /> DCS Web GCA <span class="subtitle">Air Traffic Console</span></h1>
-    <div class="controls">
-      <label for="sourceSelect">SRV:</label>
-      <select id="sourceSelect"></select>
-      <label for="runwaySelect">RWY:</label>
-      <select id="runwaySelect"></select>
-      <button id="refreshRunways" type="button" title="ミッション/マップを変えた直後に滑走路データを取り直す">&#8635;</button>
-      <button id="mapToggle" type="button" title="レーダー画面に OpenStreetMap の地図背景を重ねる (ON/OFF)">MAP</button>
-      <button id="perfToggle" type="button" title="更新頻度 (Hz) とレイテンシ (ms) の表示を切り替える (ON/OFF)">PERF</button>
-      <span id="latency" class="status connected">UPD -- Hz | LAT -- ms</span>
-      <span id="connStatus" class="status disconnected">DISCONNECTED</span>
-    </div>
-  </header>
+  <div class="app">
+    <header class="topbar">
+      <a class="home-link" href="../" title="FFS のトップページへ戻る"><span aria-hidden="true">←</span>FFS ホーム</a>
+      <h1 class="brand">
+        <img src="icon.svg" width="22" height="22" alt="" />
+        <span>Web GCA</span>
+      </h1>
 
-  <div id="infoBar" class="info-bar">
-    <span id="missionInfo">-</span>
-    <span id="runwayInfo"></span>
-    <span id="trackCount"></span>
+      <nav class="modes" role="tablist" aria-label="管制モード">
+        <button class="mode-tab" role="tab" data-mode="gca" aria-controls="mode-gca" title="GCA 精密進入レーダー (キー 1)">
+          <span class="mode-name">GCA</span><span class="mode-desc">精密進入</span>
+        </button>
+        <button class="mode-tab" role="tab" data-mode="gci" aria-controls="mode-gci" title="GCI 迎撃管制 (キー 2)">
+          <span class="mode-name">GCI</span><span class="mode-desc">迎撃管制</span>
+        </button>
+        <button class="mode-tab" role="tab" data-mode="twr" aria-controls="mode-twr" title="TWR 飛行場管制 (キー 3)">
+          <span class="mode-name">TWR</span><span class="mode-desc">飛行場</span>
+        </button>
+        <button class="mode-tab" role="tab" data-mode="lso" aria-controls="mode-lso" title="LSO 着艦誘導 (キー 4)">
+          <span class="mode-name">LSO</span><span class="mode-desc">着艦</span>
+        </button>
+      </nav>
+
+      <div class="pickers">
+        <label class="picker">
+          <span class="picker-label">サーバー</span>
+          <select id="sourceSelect"></select>
+        </label>
+        <label class="picker picker-runway">
+          <span class="picker-label">滑走路</span>
+          <select id="runwaySelect"></select>
+        </label>
+        <button id="refreshRunways" class="icon-btn" type="button"
+                title="滑走路データを取り直す (ミッションやマップを変えた直後に)" aria-label="滑走路データを取り直す">&#8635;</button>
+      </div>
+
+      <div class="status">
+        <button id="mapToggle" class="toggle" type="button" aria-pressed="false"
+                title="GCI / TWR のスコープに地図を重ねる (キー M)">地図</button>
+        <button id="perfToggle" class="toggle" type="button" aria-pressed="false"
+                title="更新頻度 (Hz) と遅延 (ms) を表示する">性能</button>
+        <span id="latency" class="perf" title="WebSocket の更新頻度と、サーバー送信から受信までの遅延">-- Hz · -- ms</span>
+        <span id="connStatus" class="conn" role="status"><i class="dot" aria-hidden="true"></i><span class="conn-text">接続中…</span></span>
+      </div>
+    </header>
+
+    <div id="infoBar" class="context">
+      <span id="streamAlert" class="alert-chip" role="status" hidden></span>
+      <span id="missionInfo" class="ctx ctx-mission"></span>
+      <span id="runwayInfo" class="ctx ctx-runway"></span>
+      <span id="windInfo" class="ctx"></span>
+      <span id="trackCount" class="ctx ctx-count"></span>
+    </div>
+
+    <main class="workspace">
+      <!-- ================= GCA (Precision Approach Radar) ================= -->
+      <section id="mode-gca" class="mode" role="tabpanel" aria-label="GCA 精密進入">
+        <div class="stage stage-split">
+          <div class="scope">
+            <div class="scope-head">
+              <h2>Azimuth <small>方位 / コース偏差</small></h2>
+              <div class="zoom" data-zoom="gca" role="group" aria-label="GCA の表示距離">
+                <button type="button" data-step="-1" aria-label="表示距離を短く (拡大)" title="表示距離を短く (拡大)">−</button>
+                <output class="zoom-value">12 nm</output>
+                <button type="button" data-step="1" aria-label="表示距離を長く (縮小)" title="表示距離を長く (縮小)">+</button>
+              </div>
+            </div>
+            <div class="canvas-wrap"><canvas id="azimuthScope"></canvas></div>
+          </div>
+          <div class="scope">
+            <div class="scope-head">
+              <h2>Elevation <small>高度 / グライドパス偏差</small></h2>
+            </div>
+            <div class="canvas-wrap"><canvas id="elevationScope"></canvas></div>
+          </div>
+        </div>
+
+        <aside class="side" aria-label="GCA の詳細">
+          <section class="panel focus" aria-labelledby="gcaFocusTitle">
+            <div class="panel-head">
+              <h2 id="gcaFocusTitle">誘導中の機体</h2>
+              <span id="gcaFocusMode" class="focus-mode"></span>
+              <button id="gcaFocusAuto" class="link-btn" type="button" hidden>自動に戻す</button>
+            </div>
+            <div id="gcaFocus" class="focus-body"></div>
+          </section>
+
+          <section class="panel list-panel" aria-labelledby="gcaListTitle">
+            <div class="panel-head">
+              <h2 id="gcaListTitle">最終進入</h2>
+              <span id="gcaListCount" class="count"></span>
+            </div>
+            <div id="gcaList" class="tracklist" aria-label="最終進入中の機体"></div>
+          </section>
+
+          <section class="panel log-panel" aria-labelledby="talkdownTitle">
+            <div class="panel-head">
+              <h2 id="talkdownTitle">誘導文ログ</h2>
+            </div>
+            <div id="talkdownLog" class="log" aria-live="off"></div>
+          </section>
+        </aside>
+      </section>
+
+      <!-- ================= GCI (Ground Controlled Intercept) ================= -->
+      <section id="mode-gci" class="mode" role="tabpanel" aria-label="GCI 迎撃管制" hidden>
+        <div class="stage">
+          <div class="scope">
+            <div class="scope-head">
+              <h2>PPI <small>ドラッグで移動・ホイールで拡大縮小</small></h2>
+              <label id="bullseyeLabel" class="inline-picker" hidden>BULLS
+                <select id="bullseyeSelect"></select>
+              </label>
+              <button id="gciCenter" class="btn" type="button" title="スコープの中心を滑走路末端に戻す (キー C)">中心に戻す</button>
+              <div class="zoom" data-zoom="gci" role="group" aria-label="GCI の表示距離">
+                <button type="button" data-step="-1" aria-label="表示距離を短く (拡大)" title="表示距離を短く (拡大)">−</button>
+                <output class="zoom-value">20 nm</output>
+                <button type="button" data-step="1" aria-label="表示距離を長く (縮小)" title="表示距離を長く (縮小)">+</button>
+              </div>
+            </div>
+            <div class="canvas-wrap">
+              <canvas id="ppiScope"></canvas>
+              <span id="gciCursor" class="cursor-readout" aria-live="off">BULLS --</span>
+            </div>
+          </div>
+        </div>
+
+        <aside class="side" aria-label="GCI の詳細">
+          <section class="panel focus" aria-labelledby="interceptTitle">
+            <div class="panel-head">
+              <h2 id="interceptTitle">迎撃解</h2>
+              <button id="gciClear" class="link-btn" type="button" hidden>指定を解除</button>
+            </div>
+            <div id="interceptInfo" class="focus-body"></div>
+          </section>
+
+          <section class="panel list-panel grow" aria-labelledby="gciListTitle">
+            <div class="panel-head">
+              <h2 id="gciListTitle">航空機</h2>
+              <span id="gciListCount" class="count"></span>
+            </div>
+            <div id="gciList" class="tracklist" aria-label="航空機の一覧"></div>
+          </section>
+        </aside>
+      </section>
+
+      <!-- ================= TWR (Aerodrome control) ================= -->
+      <section id="mode-twr" class="mode" role="tabpanel" aria-label="TWR 飛行場管制" hidden>
+        <div class="stage">
+          <div class="scope">
+            <div class="scope-head">
+              <h2>Aerodrome <small>飛行場周辺・ホイールで拡大縮小</small></h2>
+              <div class="zoom" data-zoom="twr" role="group" aria-label="TWR の表示距離">
+                <button type="button" data-step="-1" aria-label="表示距離を短く (拡大)" title="表示距離を短く (拡大)">−</button>
+                <output class="zoom-value">6 nm</output>
+                <button type="button" data-step="1" aria-label="表示距離を長く (縮小)" title="表示距離を長く (縮小)">+</button>
+              </div>
+            </div>
+            <div class="canvas-wrap"><canvas id="twrScope"></canvas></div>
+          </div>
+        </div>
+
+        <aside class="side" aria-label="TWR の詳細">
+          <section class="panel list-panel grow" aria-labelledby="twrListTitle">
+            <div class="panel-head">
+              <h2 id="twrListTitle">飛行場周辺の交通</h2>
+              <span id="twrListCount" class="count"></span>
+            </div>
+            <div id="fieldList" class="tracklist" aria-label="飛行場周辺の機体"></div>
+          </section>
+        </aside>
+      </section>
+
+      <!-- ================= LSO (Carrier landing aid) ================= -->
+      <section id="mode-lso" class="mode" role="tabpanel" aria-label="LSO 着艦誘導" hidden>
+        <div class="stage stage-split">
+          <div class="scope">
+            <div class="scope-head">
+              <h2>Lineup / Glideslope <small>ラインアップと降下角</small></h2>
+              <div class="zoom" data-zoom="lso" role="group" aria-label="LSO の表示距離">
+                <button type="button" data-step="-1" aria-label="表示距離を短く (拡大)" title="表示距離を短く (拡大)">−</button>
+                <output class="zoom-value">4 nm</output>
+                <button type="button" data-step="1" aria-label="表示距離を長く (縮小)" title="表示距離を長く (縮小)">+</button>
+              </div>
+            </div>
+            <div class="canvas-wrap"><canvas id="lsoScope"></canvas></div>
+          </div>
+          <div class="scope">
+            <div class="scope-head">
+              <h2>Platform View <small>LSO 台からの見え方</small></h2>
+            </div>
+            <div class="canvas-wrap"><canvas id="lsoPlatformScope"></canvas></div>
+          </div>
+        </div>
+
+        <aside class="side" aria-label="LSO の詳細">
+          <section class="panel">
+            <label class="field">
+              <span class="field-label">空母</span>
+              <select id="carrierSelect"><option value="">-- 空母を選択 --</option></select>
+            </label>
+          </section>
+
+          <section class="panel focus" aria-labelledby="lsoFocusTitle">
+            <div class="panel-head">
+              <h2 id="lsoFocusTitle">誘導中の機体</h2>
+              <span id="lsoFocusMode" class="focus-mode"></span>
+              <button id="lsoFocusAuto" class="link-btn" type="button" hidden>自動に戻す</button>
+            </div>
+            <div id="lsoInfo" class="focus-body"></div>
+          </section>
+
+          <section class="panel list-panel grow" aria-labelledby="lsoListTitle">
+            <div class="panel-head">
+              <h2 id="lsoListTitle">空母に近い機体</h2>
+              <span id="lsoListCount" class="count"></span>
+            </div>
+            <div id="lsoList" class="tracklist" aria-label="空母に近い機体"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
   </div>
 
-  <nav class="tabs">
-    <button class="tab active" data-mode="gca">GCA (PAR)</button>
-    <button class="tab" data-mode="gci">GCI (Intercept)</button>
-    <button class="tab" data-mode="twr">TWR (Field)</button>
-    <button class="tab" data-mode="lso">LSO (Carrier)</button>
-  </nav>
-
-  <!-- ================= GCA (Precision Approach Radar) ================= -->
-  <section id="mode-gca" class="mode">
-    <main>
-      <section class="scope-panel">
-        <h2>Azimuth</h2>
-        <canvas id="azimuthScope" width="900" height="360"></canvas>
-      </section>
-
-      <section class="scope-panel">
-        <h2>Elevation</h2>
-        <canvas id="elevationScope" width="900" height="300"></canvas>
-      </section>
-
-      <section class="table-panel">
-        <h2>Talk-down Log</h2>
-        <div id="talkdownLog" class="log-panel"></div>
-      </section>
-
-      <section class="table-panel">
-        <h2>Approach Digest</h2>
-        <div id="digestPanel" class="digest-panel"></div>
-      </section>
-
-      <section class="table-panel">
-        <h2>Approach Data</h2>
-        <table id="trackTable">
-          <thead>
-            <tr>
-              <th>Callsign</th>
-              <th>Type</th>
-              <th>RNG (nm)</th>
-              <th>AZ DEV</th>
-              <th>GS DEV</th>
-              <th>ALT (ft)</th>
-              <th>VS (fpm)</th>
-              <th>GS (kt)</th>
-              <th>Guidance</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </section>
-    </main>
-  </section>
-
-  <!-- ================= GCI (Ground Controlled Intercept) ================= -->
-  <section id="mode-gci" class="mode" hidden>
-    <main>
-      <section class="scope-panel">
-        <div class="gci-controls">
-          <label>OWN:
-            <select id="ownshipSelect"><option value="">-- none --</option></select>
-          </label>
-          <label>RANGE:
-            <select id="gciRange">
-              <option value="10">10 nm</option>
-              <option value="20" selected>20 nm</option>
-              <option value="40">40 nm</option>
-              <option value="80">80 nm</option>
-            </select>
-          </label>
-          <label id="bullseyeLabel" hidden>BULLS:
-            <select id="bullseyeSelect"></select>
-          </label>
-          <button id="gciCenter" type="button" title="スコープの中心を滑走路しきい値に戻す">CENTER</button>
-          <span class="hint">Click a blip to designate TARGET. Drag to pan, scroll to zoom.</span>
-          <span id="gciCursor" class="hint cursor-readout">BULLS --</span>
-        </div>
-        <canvas id="ppiScope" width="820" height="820"></canvas>
-      </section>
-
-      <section class="table-panel">
-        <h2>Intercept Solution</h2>
-        <div id="interceptInfo" class="info-grid">Select OWN and TARGET.</div>
-      </section>
-    </main>
-  </section>
-
-  <!-- ================= TWR (Aerodrome control) ================= -->
-  <section id="mode-twr" class="mode" hidden>
-    <main>
-      <section class="scope-panel">
-        <h2>Aerodrome View (6 nm)</h2>
-        <canvas id="twrScope" width="900" height="640"></canvas>
-      </section>
-
-      <section class="table-panel">
-        <h2>Field Traffic</h2>
-        <table id="fieldTable">
-          <thead>
-            <tr>
-              <th>Callsign</th>
-              <th>Type</th>
-              <th>RNG (nm)</th>
-              <th>BRG</th>
-              <th>ALT (ft)</th>
-              <th>VS (fpm)</th>
-              <th>GS (kt)</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </section>
-    </main>
-  </section>
-
-  <!-- ================= LSO (Carrier landing aid) ================= -->
-  <section id="mode-lso" class="mode" hidden>
-    <main>
-      <section class="scope-panel">
-        <div class="gci-controls">
-          <label>CARRIER:
-            <select id="carrierSelect"><option value="">-- none --</option></select>
-          </label>
-          <label>AIRCRAFT:
-            <select id="lsoPilotSelect"><option value="">-- none --</option></select>
-          </label>
-          <span class="hint">Click a blip to designate the aircraft. Scroll to zoom.</span>
-        </div>
-        <canvas id="lsoScope" width="900" height="520"></canvas>
-      </section>
-
-      <section class="scope-panel">
-        <h2>LSO Platform View</h2>
-        <canvas id="lsoPlatformScope" width="900" height="300"></canvas>
-      </section>
-
-      <section class="table-panel">
-        <h2>Approach Data</h2>
-        <div id="lsoInfo" class="info-grid">Select a CARRIER and an AIRCRAFT.</div>
-      </section>
-    </main>
-  </section>
-
-  <script src="js/main.js"></script>
+  <script src="js/main.js?v=2026-10-30-ui"></script>
 </body>
 </html>
